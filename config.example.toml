@@ -1,8 +1,14 @@
 # Best Photo Picker — tuning. Copy to config.toml, edit, pass with `score -c config.toml`.
 # Defaults are conservative: the tool biases toward "maybe", never toward "rejected".
 
+[group]
+method = "time"              # "time" = burst by capture-time gap; "similarity" = group near-duplicate frames
+sim_max_distance = 10        # (similarity) max perceptual-hash Hamming distance within a group (0-64; lower = stricter)
+sim_time_ceiling = 30.0      # (similarity) always start a new group across gaps larger than this many seconds
+phash_size = 8               # (similarity) dHash grid (8 -> 64-bit hash)
+
 [burst]
-gap_seconds = 2.0            # a gap larger than this between frames starts a new burst
+gap_seconds = 2.0            # (time) a gap larger than this between frames starts a new burst
 
 [select]
 keep_per_burst = 1           # how many top frames per burst go to keepers/

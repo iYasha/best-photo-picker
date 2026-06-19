@@ -16,6 +16,9 @@ dependencies = [
 # sharpness + exposure only.
 faces = ["mediapipe>=0.10"]
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [project.scripts]
 bestphoto = "bestphoto.cli:main"
 

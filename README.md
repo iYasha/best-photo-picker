@@ -15,9 +15,14 @@ score  →  manifest.csv     slow, run once (on the Mac), moves nothing
 review →  symlink folder    fast, re-runnable, stages keeper/maybe/rejected bins
 ```
 
+Grouping is selectable (`--group` / `[group] method`):
+- **time** (default) — bursts by capture-time gap; cheapest, good for one camera/clean gaps.
+- **similarity** — clusters near-duplicate frames by perceptual hash; camera-agnostic, splits
+  a pan mid-hold and merges a recompose pause. See `docs/adr/0004`.
+
 Per photo, `score`:
 1. reads EXIF capture time (sub-second when present), honoring the orientation tag;
-2. groups frames into **bursts** by a >2s time gap (a lone frame is a **single**);
+2. groups frames — by time gap, or by perceptual-hash similarity (a lone frame is a **single**);
 3. finds the **subject** — face (MediaPipe) → centre → whole frame — and **locks one region
    per burst** so every frame is scored on the same pixels;
 4. applies **gate + rank**: eyes-closed gates a portrait (size-weighted across faces for
@@ -43,6 +48,9 @@ without it there's no face/eye detection (eye gate disabled); the tool still run
 ```bash
 # 1. score the NAS folder into a manifest (nothing is moved)
 uv run bestphoto score /Volumes/photo/2026-06-19 -m manifest.csv -c config.toml
+
+#    grouping strategy: time bursts (default) or content near-duplicate clustering
+uv run bestphoto score /Volumes/photo/2026-06-19 --group similarity
 
 # 2. eyeball / hand-edit manifest.csv if you like, then stage symlinks to review
 uv run bestphoto review /Volumes/photo/2026-06-19 -m manifest.csv -o ~/review

@@ -12,7 +12,11 @@ except ModuleNotFoundError:  # pragma: no cover
 
 @dataclass(frozen=True)
 class Config:
+    group_method: str = "time"      # "time" (capture-gap bursts) or "similarity" (near-duplicate)
     gap_seconds: float = 2.0
+    sim_max_distance: int = 10      # similarity: max perceptual-hash Hamming distance within a group
+    sim_time_ceiling: float = 30.0  # similarity: always split across gaps larger than this (seconds)
+    phash_size: int = 8             # similarity: dHash grid (8 -> 64-bit hash)
     keep_per_burst: int = 1
     downscale_long_edge: int = 1280
     max_faces: int = 6
@@ -35,6 +39,7 @@ class Config:
         if tomllib is None:
             raise RuntimeError("Need Python 3.11+ (tomllib) to read a config file.")
         data = tomllib.loads(Path(path).read_text())
+        group = data.get("group", {})
         burst = data.get("burst", {})
         select = data.get("select", {})
         detect = data.get("detect", {})
@@ -43,7 +48,11 @@ class Config:
         rej = data.get("reject", {})
         d = cls()  # defaults
         return cls(
+            group_method=group.get("method", d.group_method),
             gap_seconds=burst.get("gap_seconds", d.gap_seconds),
+            sim_max_distance=group.get("sim_max_distance", d.sim_max_distance),
+            sim_time_ceiling=group.get("sim_time_ceiling", d.sim_time_ceiling),
+            phash_size=group.get("phash_size", d.phash_size),
             keep_per_burst=select.get("keep_per_burst", d.keep_per_burst),
             downscale_long_edge=detect.get("downscale_long_edge", d.downscale_long_edge),
             max_faces=detect.get("max_faces", d.max_faces),

@@ -12,7 +12,7 @@ from pathlib import Path
 CACHE_FIELDS = [
     "rel", "mtime", "size", "gap", "when_iso", "has_subsec",
     "face_count", "primary_box", "eye_score", "sharpness",
-    "blown_frac", "crushed_frac", "exposure_flag",
+    "blown_frac", "crushed_frac", "exposure_flag", "phash",
 ]
 
 MANIFEST_FIELDS = [
@@ -22,7 +22,12 @@ MANIFEST_FIELDS = [
 ]
 
 
-def load_cache(path, gap: float) -> dict:
+def load_cache(path, tag) -> dict:
+    """Load cached measurements whose discriminator (`gap` column) matches `tag`.
+
+    The tag is the grouping signature — the gap-seconds for time mode, or "sim" for
+    similarity mode — so both modes' rows can share one cache file without colliding.
+    """
     out = {}
     p = Path(path)
     if not p.exists():
@@ -30,7 +35,7 @@ def load_cache(path, gap: float) -> dict:
     with p.open(newline="") as fh:
         for row in csv.DictReader(fh):
             try:
-                if abs(float(row["gap"]) - gap) > 1e-9:
+                if str(row.get("gap", "")) != str(tag):
                     continue
                 key = (row["rel"], float(row["mtime"]), int(row["size"]))
             except (KeyError, ValueError, TypeError):

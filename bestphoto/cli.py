@@ -23,7 +23,9 @@ def main(argv=None):
     s.add_argument("source", type=Path, help="root folder of JPEGs (e.g. the NAS mount)")
     s.add_argument("-c", "--config", type=Path, default=None, help="TOML config (see config.example.toml)")
     s.add_argument("-m", "--manifest", type=Path, default=Path("manifest.csv"))
-    s.add_argument("--keep", type=int, default=None, help="keepers per burst (overrides config; default 1)")
+    s.add_argument("--group", choices=["time", "similarity"], default=None,
+                   help="grouping strategy (overrides config; default time)")
+    s.add_argument("--keep", type=int, default=None, help="keepers per group (overrides config; default 1)")
     s.add_argument("--subject", choices=["auto", "face", "center", "whole"], default="auto",
                    help="subject-region mode for sharpness (default auto: face->centre fallback)")
     s.add_argument("--cache", type=Path, default=Path(".bpp-cache.csv"), help="resumable measurement cache")
@@ -49,6 +51,8 @@ def main(argv=None):
         cfg = Config.load(a.config)
         if a.keep is not None:
             cfg = replace(cfg, keep_per_burst=a.keep)
+        if a.group is not None:
+            cfg = replace(cfg, group_method=a.group)
         pipeline.score(a.source, cfg, a.manifest, a.cache,
                        resume=not a.no_resume, subject_mode=a.subject)
     elif a.cmd == "review":

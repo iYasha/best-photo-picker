@@ -165,3 +165,10 @@ cython_debug/
 manifest.csv
 .bpp-cache.csv
 
+# best-photo-picker outputs (regenerated; baselines live in tests/golden/)
+/manifest*.csv
+/*.html
+/.bpp-cache*.csv
+/config.toml
+.jbeval/
+
