@@ -1,8 +1,15 @@
-"""Tunable thresholds, loaded from a TOML file (see config.example.toml)."""
+"""Tunable thresholds, loaded from a TOML file (see config.example.toml).
+
+A pydantic-settings model: defaults live here, a TOML file overrides them
+(``Config.load``), and any field can also be overridden from the environment
+with the ``BPP_`` prefix (e.g. ``BPP_GAP_SECONDS=3``). Frozen — replace a field
+with ``cfg.model_copy(update={...})``.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:
     import tomllib  # Python 3.11+
@@ -10,8 +17,9 @@ except ModuleNotFoundError:  # pragma: no cover
     tomllib = None
 
 
-@dataclass(frozen=True)
-class Config:
+class Config(BaseSettings):
+    model_config = SettingsConfigDict(frozen=True, env_prefix="BPP_")
+
     group_method: str = "time"      # "time" (capture-gap bursts) or "similarity" (near-duplicate)
     gap_seconds: float = 2.0
     sim_max_distance: int = 10      # similarity: max perceptual-hash Hamming distance within a group
@@ -46,25 +54,27 @@ class Config:
         eyes = data.get("eyes", {})
         exp = data.get("exposure", {})
         rej = data.get("reject", {})
-        d = cls()  # defaults
-        return cls(
-            group_method=group.get("method", d.group_method),
-            gap_seconds=burst.get("gap_seconds", d.gap_seconds),
-            sim_max_distance=group.get("sim_max_distance", d.sim_max_distance),
-            sim_time_ceiling=group.get("sim_time_ceiling", d.sim_time_ceiling),
-            phash_size=group.get("phash_size", d.phash_size),
-            keep_per_burst=select.get("keep_per_burst", d.keep_per_burst),
-            downscale_long_edge=detect.get("downscale_long_edge", d.downscale_long_edge),
-            max_faces=detect.get("max_faces", d.max_faces),
-            min_face_frac=detect.get("min_face_frac", d.min_face_frac),
-            foreground_ratio=detect.get("foreground_ratio", d.foreground_ratio),
-            yunet_score=detect.get("yunet_score", d.yunet_score),
-            eye_open_min=eyes.get("eye_open_min", d.eye_open_min),
-            open_gate=eyes.get("open_gate", d.open_gate),
-            blown_value=exp.get("blown_value", d.blown_value),
-            blown_frac=exp.get("blown_frac", d.blown_frac),
-            crushed_value=exp.get("crushed_value", d.crushed_value),
-            crushed_frac=exp.get("crushed_frac", d.crushed_frac),
-            reject_sharpness_ratio=rej.get("sharpness_ratio", d.reject_sharpness_ratio),
-            single_sharpness_floor=rej.get("single_sharpness_floor", d.single_sharpness_floor),
-        )
+        # Flatten the TOML sections onto the flat field set; omit absent keys so
+        # field defaults (and any BPP_ env overrides) still apply.
+        flat = {
+            "group_method": group.get("method"),
+            "gap_seconds": burst.get("gap_seconds"),
+            "sim_max_distance": group.get("sim_max_distance"),
+            "sim_time_ceiling": group.get("sim_time_ceiling"),
+            "phash_size": group.get("phash_size"),
+            "keep_per_burst": select.get("keep_per_burst"),
+            "downscale_long_edge": detect.get("downscale_long_edge"),
+            "max_faces": detect.get("max_faces"),
+            "min_face_frac": detect.get("min_face_frac"),
+            "foreground_ratio": detect.get("foreground_ratio"),
+            "yunet_score": detect.get("yunet_score"),
+            "eye_open_min": eyes.get("eye_open_min"),
+            "open_gate": eyes.get("open_gate"),
+            "blown_value": exp.get("blown_value"),
+            "blown_frac": exp.get("blown_frac"),
+            "crushed_value": exp.get("crushed_value"),
+            "crushed_frac": exp.get("crushed_frac"),
+            "reject_sharpness_ratio": rej.get("sharpness_ratio"),
+            "single_sharpness_floor": rej.get("single_sharpness_floor"),
+        }
+        return cls(**{k: v for k, v in flat.items() if v is not None})
