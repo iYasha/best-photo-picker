@@ -1,39 +1,12 @@
-[project]
-name = "best-photo-picker"
-version = "0.1.0"
-description = "Burst-aware JPEG culler — non-destructive, manifest-first."
-readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-    "opencv-python>=4.9",
-    "Pillow>=10.2",
-    "numpy>=1.26",
-    "structlog>=24.1",
-    "click>=8.1",
-    "pydantic-settings>=2.2",
-]
+# Workspace root for the Best Photo Picker monorepo (not a package itself).
+# It groups the members below into one uv environment + one lockfile (uv.lock at this root),
+# so `uv run bestphoto …` works from here. See docs/adr/0007.
+#
+#   core/   — the Python engine + CLI (package `best-photo-picker`)
+#   macos/  — the SwiftUI app (NOT a uv member; built with Xcode). See docs/adr/0005.
+#
+# Run the CLI:   uv run bestphoto score <photos> ...
+# Run tests:     uv run --directory core pytest        (pytest config lives in core/)
 
-[project.optional-dependencies]
-# Face boxes + eye landmarks (eyes-open gate + subject region). Without it the tool runs on
-# sharpness + exposure only.
-faces = ["mediapipe>=0.10"]
-
-[dependency-groups]
-dev = ["pytest>=8"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-# Golden tests re-score real photos with ML models (~30s); deselect by default.
-# Run them explicitly with:  uv run pytest -m slow   (or -m "" for everything)
-addopts = "-m 'not slow'"
-markers = ["slow: re-scores real photos with mediapipe/YuNet (opt-in)"]
-
-[project.scripts]
-bestphoto = "bestphoto.cli:main"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["bestphoto"]
+[tool.uv.workspace]
+members = ["core"]

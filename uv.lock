@@ -2,6 +2,11 @@ version = 1
 revision = 3
 requires-python = ">=3.11"
 
+[manifest]
+members = [
+    "best-photo-picker",
+]
+
 [[package]]
 name = "absl-py"
 version = "2.4.0"
@@ -23,7 +28,7 @@ wheels = [
 [[package]]
 name = "best-photo-picker"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "core" }
 dependencies = [
     { name = "click" },
     { name = "numpy" },
