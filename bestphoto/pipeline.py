@@ -30,20 +30,6 @@ def _round_box(box):
     return tuple(round(v, 3) for v in box) if box else "whole"
 
 
-def _box_to_str(b):
-    return ";".join(f"{v:.5f}" for v in b) if b else ""
-
-
-def _box_from_str(s):
-    if not s:
-        return None
-    try:
-        x, y, w, h = (float(v) for v in s.split(";"))
-        return (x, y, w, h)
-    except ValueError:
-        return None
-
-
 def _eye_score(faces, cfg):
     """Size-weighted fraction of faces with open eyes. None when no face."""
     if not faces:
@@ -53,34 +39,6 @@ def _eye_score(faces, cfg):
         return None
     num = sum(f.area * (1.0 if f.open_prob >= cfg.eye_open_min else 0.0) for f in faces)
     return num / den
-
-
-def _cache_row(fr, tag):
-    return {
-        "rel": fr.rel, "mtime": fr.mtime, "size": fr.size, "gap": tag,
-        "when_iso": fr.when.isoformat() if fr.when else "",
-        "has_subsec": int(fr.has_subsec),
-        "face_count": fr.face_count,
-        "primary_box": _box_to_str(fr.primary_box),
-        "eye_score": "" if fr.eye_score is None else f"{fr.eye_score:.4f}",
-        "sharpness": f"{fr.sharpness:.3f}",
-        "blown_frac": f"{fr.blown:.4f}",
-        "crushed_frac": f"{fr.crushed:.4f}",
-        "exposure_flag": int(fr.exposure_flag),
-        "phash": fr.phash,
-    }
-
-
-def _fill_from_cache(fr: Frame, row: dict) -> None:
-    fr.face_count = int(row.get("face_count") or 0)
-    fr.primary_box = _box_from_str(row.get("primary_box", ""))
-    es = row.get("eye_score", "")
-    fr.eye_score = float(es) if es not in ("", None) else None
-    fr.sharpness = float(row.get("sharpness") or 0.0)
-    fr.exposure_flag = bool(int(row.get("exposure_flag") or 0))
-    fr.blown = float(row.get("blown_frac") or 0.0)
-    fr.crushed = float(row.get("crushed_frac") or 0.0)
-    fr.phash = int(row.get("phash") or 0)
 
 
 def _scan(source_root, subject_mode, cfg, detector):
@@ -119,17 +77,13 @@ class Scorer:
         self.subject_mode = subject_mode
 
     def run(self, frames, strategy):
-        self.tag = strategy.tag
-        self._cache = manifest.load_cache(self.cache_path, self.tag) if self.resume else {}
-        self._writer = manifest.CacheWriter(self.cache_path, self.resume)
         self._decoded = 0
-        try:
+        with manifest.MeasurementCache(self.cache_path, strategy.tag, self.resume) as cache:
+            self._cache = cache
             if strategy.groups_before_decode:
                 groups = self._group_then_score(frames, strategy)
             else:
                 groups = self._score_then_group(frames, strategy)
-        finally:
-            self._writer.close()
         log.info("decoded", new=self._decoded, from_cache=len(frames) - self._decoded)
         return groups
 
@@ -151,11 +105,11 @@ class Scorer:
             box = strategy.region(burst, None, self.subject_mode)
             log.debug("burst", id=burst.id, frames=len(burst.frames), region=_round_box(box))
             for fr in burst.frames:
-                if (fr.rel, fr.mtime, fr.size) in self._cache:
+                if self._cache.has(fr):
                     continue
                 gray = held.get(id(fr))
                 fr.sharpness = sharp.laplacian_variance(gray, box) if gray is not None else 0.0
-                self._writer.append(_cache_row(fr, self.tag))
+                self._cache.put(fr)
             held.clear()
         return groups
 
@@ -167,21 +121,19 @@ class Scorer:
             gray, rgb_down = detect.load_image(fr.path, self.cfg.downscale_long_edge)
             if gray is None:
                 log.warning("decode_failed", rel=fr.rel)
-                self._writer.append(_cache_row(fr, self.tag))
+                self._cache.put(fr)
                 continue
             fr.phash = dhash(gray, self.cfg.phash_size)
             self._measure(fr, gray, rgb_down)
             fr.sharpness = sharp.laplacian_variance(gray, strategy.region(None, fr, self.subject_mode))
-            self._writer.append(_cache_row(fr, self.tag))
+            self._cache.put(fr)
         groups = strategy.group(frames)
         strategy.log_grouped(groups)
         return groups
 
     def _fill_if_cached(self, fr) -> bool:
-        cached = self._cache.get((fr.rel, fr.mtime, fr.size))
-        if cached is None:
+        if not self._cache.fill(fr):
             return False
-        _fill_from_cache(fr, cached)
         log.debug("cached", rel=fr.rel, faces=fr.face_count, sharpness=round(fr.sharpness, 1))
         return True
 
@@ -213,22 +165,13 @@ def score(source_root, cfg: Config, manifest_path, cache_path, resume: bool = Tr
 def _emit(groups, cfg, manifest_path):
     rows, counts = [], {}
     for g in groups:
-        bin_burst(g, cfg)
+        verdicts = bin_burst(g, cfg)
         for fr in g.frames:
-            counts[fr.bin] = counts.get(fr.bin, 0) + 1
-            log.debug("binned", rel=fr.rel, group=g.id, bin=fr.bin,
-                      rank=fr.rank, sharpness=round(fr.sharpness, 1), reason=fr.reason)
-            rows.append({
-                "rel": fr.rel, "filename": Path(fr.rel).name, "burst_id": g.id,
-                "when_iso": fr.when.isoformat() if fr.when else "",
-                "face_count": fr.face_count,
-                "eye_score": "" if fr.eye_score is None else f"{fr.eye_score:.4f}",
-                "sharpness": f"{fr.sharpness:.3f}",
-                "exposure_flag": int(fr.exposure_flag),
-                "blown_frac": f"{fr.blown:.4f}",
-                "crushed_frac": f"{fr.crushed:.4f}",
-                "bin": fr.bin, "reason": fr.reason, "rank_in_burst": fr.rank,
-            })
+            v = verdicts[fr]
+            counts[v.bin] = counts.get(v.bin, 0) + 1
+            log.debug("binned", rel=fr.rel, group=g.id, bin=v.bin,
+                      rank=v.rank, sharpness=round(fr.sharpness, 1), reason=v.reason)
+            rows.append(manifest.manifest_row(fr, g.id, v))
     manifest.write_manifest(manifest_path, rows)
     log.info("scored", manifest=str(manifest_path), bins=counts)
     return counts

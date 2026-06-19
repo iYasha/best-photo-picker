@@ -124,13 +124,13 @@ def load_image(path, long_edge: int):
         return None, None
 
 
-class FaceDetector:
-    """Finds faces and reads eye-open per face, behind one interface.
+class FaceLocator:
+    """Finds face boxes with YuNet — the model robust on real scene photos across scales.
 
-    Detection thresholds come from `cfg` (max_faces, min_face_frac, yunet_score,
-    foreground_ratio); the two models are loaded lazily and shared process-wide. Graceful
-    degradation: a missing detector yields no faces (sharpness + exposure only); a missing
-    landmarker leaves `open_prob` at 1.0, so the eye gate is effectively disabled.
+    Keeps only foreground faces: those at least `foreground_ratio` of the largest face's area
+    (faces at the same distance are similar size; background people are much smaller), with
+    `min_face_frac` as an absolute floor for the degenerate all-far case. The model is loaded
+    lazily and shared process-wide; missing model -> no faces.
     """
 
     def __init__(self, cfg: Config):
@@ -138,23 +138,14 @@ class FaceDetector:
         self._yunet_path = str(
             os.environ.get("BPP_FACE_DETECTOR") or _cache_dir() / "yunet_face_2023mar.onnx"
         )
-        self._lm_path = str(
-            os.environ.get("BPP_FACE_MODEL") or _cache_dir() / "face_landmarker.task"
-        )
 
     @property
     def available(self) -> bool:
         return _load_yunet(self._yunet_path) is not None
 
-    @property
-    def eyes_available(self) -> bool:
-        return _load_landmarker(self._lm_path)[0] is not None
-
-    def faces(self, rgb: np.ndarray):
-        """Detect faces with YuNet, then read eye-open per face. Keeps only foreground faces:
-        those at least `foreground_ratio` of the largest face's area (faces at the same distance
-        are similar size; background people are much smaller), with `min_face_frac` as an
-        absolute floor for the degenerate all-far case."""
+    def locate(self, rgb: np.ndarray):
+        """Return foreground faces, largest first, as (box_norm, area_frac, box_px) tuples.
+        `box_norm` is (x, y, w, h) in [0, 1]; `box_px` is the pixel box the eye-reader needs."""
         yn = _load_yunet(self._yunet_path)
         if yn is None or rgb is None:
             return []
@@ -188,10 +179,28 @@ class FaceDetector:
             if area_frac < keep_frac:
                 continue
             nb = (x / w, y / h, bw / w, bh / h)
-            out.append(Face(box=nb, area=area_frac, open_prob=self._eye_open_for(rgb, (x, y, bw, bh))))
+            out.append((nb, area_frac, (x, y, bw, bh)))
         return out
 
-    def _eye_open_for(self, rgb: np.ndarray, box_px) -> float:
+
+class EyeReader:
+    """Reads eye-open for one face crop via MediaPipe FaceLandmarker blendshapes.
+
+    The model is loaded lazily and shared process-wide; a missing model leaves `open_prob` at
+    1.0, so the eye gate is effectively disabled.
+    """
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self._lm_path = str(
+            os.environ.get("BPP_FACE_MODEL") or _cache_dir() / "face_landmarker.task"
+        )
+
+    @property
+    def available(self) -> bool:
+        return _load_landmarker(self._lm_path)[0] is not None
+
+    def open_prob(self, rgb: np.ndarray, box_px) -> float:
         """Run FaceLandmarker on a padded crop of one face; return open prob (1.0 if unknown)."""
         lm, mp = _load_landmarker(self._lm_path)
         if lm is None:
@@ -211,3 +220,32 @@ class FaceDetector:
         if not res.face_blendshapes:
             return 1.0
         return 1.0 - _blink(res.face_blendshapes[0])
+
+
+class FaceDetector:
+    """Finds faces and reads eye-open per face, behind one interface — a facade composing a
+    `FaceLocator` (YuNet boxes, ADR-0003) and an `EyeReader` (MediaPipe eyes). Each collaborator
+    owns one model; either can be injected (tests, an alternate model), else it is built from
+    `cfg`. Graceful degradation: no locator -> no faces (sharpness + exposure only); no
+    eye-reader -> open_prob 1.0, so the eye gate is effectively disabled.
+    """
+
+    def __init__(self, cfg: Config, locator=None, eyes=None):
+        self.cfg = cfg
+        self.locator = locator or FaceLocator(cfg)
+        self.eyes = eyes or EyeReader(cfg)
+
+    @property
+    def available(self) -> bool:
+        return self.locator.available
+
+    @property
+    def eyes_available(self) -> bool:
+        return self.eyes.available
+
+    def faces(self, rgb: np.ndarray):
+        """Locate face boxes, then read eye-open per box."""
+        return [
+            Face(box=nb, area=area_frac, open_prob=self.eyes.open_prob(rgb, box_px))
+            for nb, area_frac, box_px in self.locator.locate(rgb)
+        ]

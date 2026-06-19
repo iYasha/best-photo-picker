@@ -11,8 +11,11 @@ from .phash import hamming
 log = get_logger()
 
 
-@dataclass
+@dataclass(eq=False)
 class Frame:
+    """A scanned, then measured, photo. Identity-based (eq=False): every frame is a distinct
+    object, so frames are hashable and can key dicts/sets directly — no id() workarounds. The
+    binning verdict (bin/reason/rank) is NOT stored here; binning returns it as a Verdict."""
     path: object              # pathlib.Path
     rel: str                  # path relative to the source root (portable, NAS-relative)
     when: "datetime | None"
@@ -28,10 +31,6 @@ class Frame:
     blown: float = 0.0
     crushed: float = 0.0
     phash: int = 0
-    # filled by binning:
-    bin: str = ""
-    reason: str = ""
-    rank: int = 0
 
 
 @dataclass
