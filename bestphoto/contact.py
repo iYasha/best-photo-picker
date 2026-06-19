@@ -12,8 +12,7 @@ import io
 from collections import defaultdict
 from pathlib import Path
 
-from PIL import Image, ImageOps
-
+from . import decode
 from .log import get_logger
 from .manifest import read_manifest
 
@@ -50,16 +49,13 @@ h1 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
 
 
 def _thumb_data_uri(path: Path, px: int) -> str | None:
-    try:
-        with Image.open(path) as im:
-            im = ImageOps.exif_transpose(im).convert("RGB")
-            im.thumbnail((px, px))
-            buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=72)
-        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-    except Exception as e:
-        log.warning("thumb_failed", file=str(path), error=str(e))
+    im = decode.thumbnail(path, px)
+    if im is None:
+        log.warning("thumb_failed", file=str(path))
         return None
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=72)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _card(row, uri: str | None) -> str:

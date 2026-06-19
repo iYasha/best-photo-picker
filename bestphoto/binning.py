@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
-from . import eyes
+from . import exposure, eyes
 from .bursts import Burst
 from .config import Config
 
@@ -65,8 +65,8 @@ def bin_burst(burst: Burst, cfg: Config) -> "dict[object, Verdict]":
         else:
             b = "maybe"
             reason = "burst runner-up"
-        if f.exposure_flag and b != "rejected":
-            reason += "; exposure flag"
+        if b != "rejected":
+            reason = exposure.annotate(reason, f.exposure_flag)
         verdicts[f] = Verdict(b, reason, rank)
 
     for f in frames:
@@ -83,6 +83,4 @@ def _verdict_single(f, cfg: Config) -> Verdict:
         b, reason = "maybe", "single, sharpness uncertain"
     else:
         b, reason = "keeper", "single, passed checks"
-    if f.exposure_flag:
-        reason += "; exposure flag"
-    return Verdict(b, reason, 0)
+    return Verdict(b, exposure.annotate(reason, f.exposure_flag), 0)

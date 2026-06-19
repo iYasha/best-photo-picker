@@ -1,4 +1,4 @@
-"""Image decode + face/eye detection.
+"""Face/eye detection. (Pixel decode lives in decode.py.)
 
 `FaceDetector` is the seam: one object that finds face boxes and reads eye-open per face,
 built from a `Config`. Two models sit behind it, each used for what it's good at:
@@ -19,7 +19,6 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageOps
 
 from .config import Config
 from .log import get_logger
@@ -104,24 +103,6 @@ def _load_landmarker(model_path: str):
 def _blink(blendshapes) -> float:
     vals = [c.score for c in blendshapes if c.category_name in ("eyeBlinkLeft", "eyeBlinkRight")]
     return max(vals) if vals else 0.0
-
-
-def load_image(path, long_edge: int):
-    """Return (gray_fullres uint8, rgb_downscaled uint8) honoring EXIF orientation."""
-    try:
-        with Image.open(path) as im:
-            im = ImageOps.exif_transpose(im).convert("RGB")
-            w, h = im.size
-            gray = np.asarray(im.convert("L"))
-            scale = long_edge / max(w, h)
-            if scale < 1.0:
-                small = im.resize((max(1, int(w * scale)), max(1, int(h * scale))))
-                rgb_down = np.asarray(small)
-            else:
-                rgb_down = np.asarray(im)
-            return gray, rgb_down
-    except Exception:
-        return None, None
 
 
 class FaceLocator:

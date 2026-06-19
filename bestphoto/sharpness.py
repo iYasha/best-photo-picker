@@ -1,4 +1,4 @@
-"""Sharpness (Laplacian variance) on the locked subject region, and exposure flags."""
+"""Sharpness (Laplacian variance) on the locked subject region. Exposure lives in exposure.py."""
 from __future__ import annotations
 
 import numpy as np
@@ -28,17 +28,6 @@ def laplacian_variance(gray: np.ndarray, box=None) -> float:
            + np.roll(f, 1, 0) + np.roll(f, -1, 0)
            + np.roll(f, 1, 1) + np.roll(f, -1, 1))
     return float(lap.var())
-
-
-def exposure_flags(gray: np.ndarray, cfg):
-    """Return (flagged, blown_frac, crushed_frac) over the whole frame."""
-    if gray is None or gray.size == 0:
-        return (False, 0.0, 0.0)
-    total = gray.size
-    blown = float((gray >= cfg.blown_value).sum()) / total
-    crushed = float((gray <= cfg.crushed_value).sum()) / total
-    flagged = blown > cfg.blown_frac or crushed > cfg.crushed_frac
-    return (flagged, blown, crushed)
 
 
 def _crop(gray: np.ndarray, box):

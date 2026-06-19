@@ -10,9 +10,10 @@ Moves no files. Reads each new photo once; cached measurements are reused on re-
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
-from . import detect, eyes, manifest
+from . import decode, eyes, exposure, manifest
 from . import sharpness as sharp
 from .binning import bin_burst
 from .bursts import Frame, Measurement, grouping_for
@@ -48,6 +49,16 @@ def _scan(source_root, subject_mode, cfg, detector):
     return frames
 
 
+@dataclass
+class _Run:
+    """The mutable state of one `Scorer.run`: the open measurement cache and a tally of frames
+    freshly decoded this run. Passed explicitly to every step so each method's interface names
+    what it touches — the Scorer itself holds only configuration and stays reusable across runs.
+    """
+    cache: "manifest.MeasurementCache"
+    decoded: int = 0
+
+
 class Scorer:
     """Decode + measure + cache + sharpness — the engine a GroupingStrategy drives.
 
@@ -66,80 +77,79 @@ class Scorer:
         self.subject_mode = subject_mode
 
     def run(self, frames, strategy):
-        self._decoded = 0
         with manifest.MeasurementCache(self.cache_path, strategy.tag, self.resume) as cache:
-            self._cache = cache
+            run = _Run(cache=cache)
             if strategy.groups_before_decode:
-                groups = self._group_then_score(frames, strategy)
+                groups = self._group_then_score(run, frames, strategy)
             else:
-                groups = self._score_then_group(frames, strategy)
-        log.info("decoded", new=self._decoded, from_cache=len(frames) - self._decoded)
+                groups = self._score_then_group(run, frames, strategy)
+        log.info("decoded", new=run.decoded, from_cache=len(frames) - run.decoded)
         return groups
 
-    def _group_then_score(self, frames, strategy):
+    def _group_then_score(self, run, frames, strategy):
         """Time: group on timestamps, then decode each burst and score it on one locked region."""
         groups = strategy.group(frames)
         strategy.log_grouped(groups)
         for burst in groups:
             held = {}  # id(frame) -> full-res gray for frames decoded this run
             for fr in burst.frames:
-                if self._fill_if_cached(fr):
+                if self._fill_if_cached(run, fr):
                     continue
-                gray, rgb_down = detect.load_image(fr.path, self.cfg.downscale_long_edge)
+                gray, rgb_down = decode.load_image(fr.path, self.cfg.downscale_long_edge)
                 held[id(fr)] = gray
                 if gray is None:
                     log.warning("decode_failed", rel=fr.rel)
                     continue
-                self._measure(fr, gray, rgb_down)
+                self._measure(run, fr, gray, rgb_down)
             resolve = strategy.subject_region(self.subject_mode, burst=burst)
             log.debug("burst", id=burst.id, frames=len(burst.frames), region=_round_box(resolve(None)))
             for fr in burst.frames:
-                if self._cache.has(fr):
+                if run.cache.has(fr):
                     continue
                 gray = held.get(id(fr))
                 fr.m.sharpness = sharp.laplacian_variance(gray, resolve(fr)) if gray is not None else 0.0
-                self._cache.put(fr)
+                run.cache.put(fr)
             held.clear()
         return groups
 
-    def _score_then_group(self, frames, strategy):
+    def _score_then_group(self, run, frames, strategy):
         """Similarity: decode every frame (phash + own-box sharpness), then group on phash."""
         resolve = strategy.subject_region(self.subject_mode)   # per-frame, no burst yet
         for fr in frames:
-            if self._fill_if_cached(fr):
+            if self._fill_if_cached(run, fr):
                 continue
-            gray, rgb_down = detect.load_image(fr.path, self.cfg.downscale_long_edge)
+            gray, rgb_down = decode.load_image(fr.path, self.cfg.downscale_long_edge)
             if gray is None:
                 log.warning("decode_failed", rel=fr.rel)
-                self._cache.put(fr)
+                run.cache.put(fr)
                 continue
-            self._measure(fr, gray, rgb_down)   # replaces fr.m, so phash + sharpness go on after
+            self._measure(run, fr, gray, rgb_down)   # replaces fr.m, so phash + sharpness go on after
             fr.m.phash = dhash(gray, self.cfg.phash_size)
             fr.m.sharpness = sharp.laplacian_variance(gray, resolve(fr))
-            self._cache.put(fr)
+            run.cache.put(fr)
         groups = strategy.group(frames)
         strategy.log_grouped(groups)
         return groups
 
-    def _fill_if_cached(self, fr) -> bool:
-        if not self._cache.fill(fr):
+    def _fill_if_cached(self, run, fr) -> bool:
+        if not run.cache.fill(fr):
             return False
         log.debug("cached", rel=fr.rel, faces=fr.face_count, sharpness=round(fr.sharpness, 1))
         return True
 
-    def _measure(self, fr, gray, rgb_down):
+    def _measure(self, run, fr, gray, rgb_down):
         """Per-frame, group-independent measurements: faces, eyes, exposure. Replaces the frame's
         Measurement; sharpness (and phash, for similarity) are filled onto it afterwards."""
         faces = self.detector.faces(rgb_down)
         fr.faces = faces
-        flag, blown, crushed = sharp.exposure_flags(gray, self.cfg)
+        flag, blown, crushed = exposure.flags(gray, self.cfg)
         fr.m = Measurement(
             face_count=len(faces),
             primary_box=max((f.box for f in faces), key=lambda b: b[2] * b[3]) if faces else None,
             eye_score=eyes.open_fraction(faces, self.cfg),
             exposure_flag=flag, blown=blown, crushed=crushed,
         )
-        self._decoded += 1
+        run.decoded += 1
         log.debug("measured", rel=fr.rel, faces=fr.face_count,
                   eye_score=None if fr.eye_score is None else round(fr.eye_score, 3),
                   exposure_flag=fr.exposure_flag)

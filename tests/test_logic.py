@@ -5,9 +5,10 @@ rule, and manifest/cache behavior. They run anywhere numpy+Pillow are installed.
 """
 from datetime import datetime, timedelta
 
+import numpy as np
 from PIL import Image
 
-from bestphoto import manifest
+from bestphoto import decode, exposure, manifest
 from bestphoto.binning import bin_burst
 from bestphoto.bursts import Burst, Frame, Measurement, SimilarityGrouping, TimeGrouping
 from bestphoto.config import Config
@@ -113,6 +114,45 @@ def test_keep_n_widens_keepers():
     c = mk("c.jpg", faces=0, sharp=240)
     v = bin_burst(Burst(0, [a, b, c]), Config(keep_per_burst=2))
     assert v[a].bin == "keeper" and v[b].bin == "keeper" and v[c].bin == "maybe"
+
+
+# ---- exposure rule (its own module, both halves) -------------------------
+
+def test_exposure_flags_blown_crushed_and_clean():
+    cfg = Config()
+    assert exposure.flags(np.full((10, 10), 255, np.uint8), cfg)[0] is True   # all white -> blown
+    assert exposure.flags(np.zeros((10, 10), np.uint8), cfg)[0] is True        # all black -> crushed
+    assert exposure.flags(np.full((10, 10), 128, np.uint8), cfg)[0] is False   # mid-grey -> clean
+
+
+def test_exposure_annotate_only_when_flagged():
+    assert exposure.annotate("sharpest in burst", True) == "sharpest in burst; exposure flag"
+    assert exposure.annotate("sharpest in burst", False) == "sharpest in burst"
+
+
+def test_exposure_flag_annotates_reason_but_never_rejects():
+    f = mk("s.jpg", faces=1, eye=1.0, sharp=200, exp=True)   # a clean keeper, but flagged exposure
+    v = bin_burst(Burst(0, [f]), Config())
+    assert v[f].bin == "keeper" and "exposure flag" in v[f].reason   # flag surfaced, bin unchanged
+
+
+# ---- decode (shared orientation-correct image read) ----------------------
+
+def test_decode_load_image_returns_gray_and_rgb(tmp_path):
+    _make_jpeg(tmp_path / "p.jpg")
+    gray, rgb = decode.load_image(tmp_path / "p.jpg", long_edge=1280)
+    assert gray.ndim == 2 and rgb.ndim == 3 and rgb.shape[2] == 3
+
+
+def test_decode_thumbnail_fits_box(tmp_path):
+    _make_jpeg(tmp_path / "p.jpg")                 # 64x64
+    im = decode.thumbnail(tmp_path / "p.jpg", px=32)
+    assert max(im.size) <= 32
+
+
+def test_decode_missing_file_degrades_to_none(tmp_path):
+    assert decode.load_image(tmp_path / "nope.jpg", 1280) == (None, None)
+    assert decode.thumbnail(tmp_path / "nope.jpg", 32) is None
 
 
 # ---- manifest / cache ----------------------------------------------------
