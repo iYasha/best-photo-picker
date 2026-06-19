@@ -44,80 +44,9 @@ class Burst:
         return len(self.frames) == 1
 
 
-def group_into_bursts(frames, gap_seconds: float):
-    """Sort by (time, filename) and split whenever the gap to the previous frame exceeds
-    gap_seconds. Frames with no usable timestamp can't be proven to share a moment, so each
-    forms its own group."""
-    def key(f):
-        return (f.when is None, f.when or datetime.max, f.rel)
-
-    ordered = sorted(frames, key=key)
-    bursts, cur = [], []
-    bid = 0
-    prev = None
-    for f in ordered:
-        split = False
-        if cur:
-            if f.when is None or prev is None:
-                split = True
-            elif (f.when - prev).total_seconds() > gap_seconds:
-                split = True
-        if split:
-            bursts.append(Burst(bid, cur))
-            bid += 1
-            cur = []
-        cur.append(f)
-        prev = f.when
-    if cur:
-        bursts.append(Burst(bid, cur))
-    return bursts
-
-
-def group_by_similarity(frames, max_distance: int, time_ceiling: float):
-    """Group near-duplicate frames by perceptual-hash distance, regardless of camera/fps.
-
-    Walk frames in capture order; start a new group when the current frame is not a
-    near-duplicate of the previous (Hamming distance > max_distance), or when they're more
-    than time_ceiling seconds apart (a safety break so similar-looking shots from different
-    moments never merge). A frame with no similar neighbour becomes a group of one."""
-    def key(f):
-        return (f.when is None, f.when or datetime.max, f.rel)
-
-    ordered = sorted(frames, key=key)
-    groups, cur = [], []
-    gid = 0
-    prev = None
-    for f in ordered:
-        split = False
-        if cur and prev is not None:
-            if hamming(f.phash, prev.phash) > max_distance:
-                split = True
-            elif f.when and prev.when and (f.when - prev.when).total_seconds() > time_ceiling:
-                split = True
-        if split:
-            groups.append(Burst(gid, cur))
-            gid += 1
-            cur = []
-        cur.append(f)
-        prev = f
-    if cur:
-        groups.append(Burst(gid, cur))
-    return groups
-
-
-def consensus_box(burst: Burst):
-    """One subject region for the whole burst: median of the primary-face boxes from frames
-    that found a face; a centered fallback when none did. The same region is then used to
-    score every frame, so the blurriest frame can't escape by dodging the detector."""
-    boxes = [fr.primary_box for fr in burst.frames if fr.primary_box]
-    if not boxes:
-        return (0.25, 0.25, 0.5, 0.5)
-    return (
-        median(b[0] for b in boxes),
-        median(b[1] for b in boxes),
-        median(b[2] for b in boxes),
-        median(b[3] for b in boxes),
-    )
+def _chronological(frames):
+    """Frames in capture order: by timestamp, undated ones last, ties broken by filename."""
+    return sorted(frames, key=lambda f: (f.when is None, f.when or datetime.max, f.rel))
 
 
 # ---- grouping strategies -------------------------------------------------
@@ -125,13 +54,12 @@ def consensus_box(burst: Burst):
 class GroupingStrategy:
     """How frames become bursts, plus the subject region used to score each frame.
 
-    The strategy only carries per-mode policy — which grouping function to call, where the
-    subject region is, the cache tag — and delegates the actual grouping to the module
-    functions above. `groups_before_decode` is the one fact the Scorer needs to sequence a
-    run: time grouping reads only timestamps, so it can group before any pixels are decoded
-    (and decode one burst at a time); similarity grouping reads perceptual hashes, so every
-    frame must be decoded first. `region` shares the whole/center modes here; subclasses add
-    the auto (face-driven) region.
+    A strategy carries only per-mode policy: how to group, where the subject region is, and
+    the cache tag. `groups_before_decode` is the one fact the Scorer needs to sequence a run:
+    time grouping reads only timestamps, so it can group before any pixels are decoded (and
+    decode one burst at a time); similarity grouping reads perceptual hashes, so every frame
+    must be decoded first. `region` shares the whole/center modes here; subclasses add the
+    auto (face-driven) region.
     """
 
     groups_before_decode = True
@@ -168,10 +96,43 @@ class TimeGrouping(GroupingStrategy):
         self.tag = cfg.gap_seconds   # cache discriminator: the gap invalidates locked-region sharpness
 
     def group(self, frames):
-        return group_into_bursts(frames, self.cfg.gap_seconds)
+        """Split into bursts wherever the gap to the previous frame exceeds gap_seconds.
+        Frames with no usable timestamp can't be proven to share a moment, so each forms its
+        own group."""
+        gap_seconds = self.cfg.gap_seconds
+        bursts, cur = [], []
+        bid = 0
+        prev = None
+        for f in _chronological(frames):
+            split = False
+            if cur:
+                if f.when is None or prev is None:
+                    split = True
+                elif (f.when - prev).total_seconds() > gap_seconds:
+                    split = True
+            if split:
+                bursts.append(Burst(bid, cur))
+                bid += 1
+                cur = []
+            cur.append(f)
+            prev = f.when
+        if cur:
+            bursts.append(Burst(bid, cur))
+        return bursts
 
     def _auto_region(self, burst, frame):
-        return consensus_box(burst)
+        """One subject region for the whole burst: median of the primary-face boxes from
+        frames that found a face; a centered fallback when none did. The same region scores
+        every frame, so the blurriest frame can't escape by dodging the detector."""
+        boxes = [fr.primary_box for fr in burst.frames if fr.primary_box]
+        if not boxes:
+            return (0.25, 0.25, 0.5, 0.5)
+        return (
+            median(b[0] for b in boxes),
+            median(b[1] for b in boxes),
+            median(b[2] for b in boxes),
+            median(b[3] for b in boxes),
+        )
 
     def log_grouped(self, groups):
         singles = sum(1 for g in groups if g.is_single)
@@ -190,7 +151,34 @@ class SimilarityGrouping(GroupingStrategy):
         self.tag = "sim"
 
     def group(self, frames):
-        return group_by_similarity(frames, self.cfg.sim_max_distance, self.cfg.sim_time_ceiling)
+        """Group near-duplicate frames by perceptual-hash distance, regardless of camera/fps.
+
+        Walk frames in capture order; start a new group when the current frame is not a
+        near-duplicate of the previous (Hamming distance > sim_max_distance), or when they're
+        more than sim_time_ceiling seconds apart (a safety break so similar-looking shots from
+        different moments never merge). A frame with no similar neighbour becomes a group of
+        one."""
+        max_distance = self.cfg.sim_max_distance
+        time_ceiling = self.cfg.sim_time_ceiling
+        groups, cur = [], []
+        gid = 0
+        prev = None
+        for f in _chronological(frames):
+            split = False
+            if cur and prev is not None:
+                if hamming(f.phash, prev.phash) > max_distance:
+                    split = True
+                elif f.when and prev.when and (f.when - prev.when).total_seconds() > time_ceiling:
+                    split = True
+            if split:
+                groups.append(Burst(gid, cur))
+                gid += 1
+                cur = []
+            cur.append(f)
+            prev = f
+        if cur:
+            groups.append(Burst(gid, cur))
+        return groups
 
     def _auto_region(self, burst, frame):
         return frame.primary_box or (0.25, 0.25, 0.5, 0.5)

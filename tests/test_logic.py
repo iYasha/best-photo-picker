@@ -9,7 +9,7 @@ from PIL import Image
 
 from bestphoto import manifest
 from bestphoto.binning import bin_burst
-from bestphoto.bursts import Burst, Frame, group_by_similarity, group_into_bursts
+from bestphoto.bursts import Burst, Frame, SimilarityGrouping, TimeGrouping
 from bestphoto.config import Config
 from bestphoto.detect import Face
 from bestphoto.pipeline import score
@@ -40,31 +40,31 @@ def _make_jpeg(path):
     Image.new("RGB", (64, 64), (128, 128, 128)).save(path, "JPEG")  # flat mid-grey: no exposure flag
 
 
-# ---- grouping ------------------------------------------------------------
+# ---- grouping (through the strategy seam) --------------------------------
 
 def test_time_grouping_splits_on_gap():
     frames = [mk(f"{i}.jpg", T0 + timedelta(seconds=s)) for i, s in
               enumerate([0.0, 0.07, 0.14, 5.0, 5.07])]
-    groups = group_into_bursts(frames, gap_seconds=2.0)
+    groups = TimeGrouping(Config(gap_seconds=2.0)).group(frames)
     assert [len(g.frames) for g in groups] == [3, 2]
 
 
 def test_time_grouping_isolated_singles():
     frames = [mk("a.jpg", T0), mk("b.jpg", T0 + timedelta(seconds=10))]
-    groups = group_into_bursts(frames, 2.0)
+    groups = TimeGrouping(Config(gap_seconds=2.0)).group(frames)
     assert len(groups) == 2 and all(g.is_single for g in groups)
 
 
 def test_similarity_groups_near_duplicates():
     frames = [mk("a.jpg", T0, phash=0), mk("b.jpg", T0, phash=1),       # hamming 1 -> same
               mk("c.jpg", T0, phash=(1 << 64) - 1)]                       # far -> split
-    groups = group_by_similarity(frames, max_distance=10, time_ceiling=30.0)
+    groups = SimilarityGrouping(Config(sim_max_distance=10, sim_time_ceiling=30.0)).group(frames)
     assert [len(g.frames) for g in groups] == [2, 1]
 
 
 def test_similarity_time_ceiling_splits_identical_look():
     frames = [mk("a.jpg", T0, phash=0), mk("b.jpg", T0 + timedelta(seconds=60), phash=0)]
-    groups = group_by_similarity(frames, max_distance=10, time_ceiling=30.0)
+    groups = SimilarityGrouping(Config(sim_max_distance=10, sim_time_ceiling=30.0)).group(frames)
     assert len(groups) == 2
 
 
