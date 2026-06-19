@@ -1,11 +1,14 @@
-"""Frame/Burst model, gap-based grouping, and the per-burst locked subject region."""
+"""Frame/Burst model, the two grouping strategies, and the per-burst locked subject region."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from statistics import median
 
+from .log import get_logger
 from .phash import hamming
+
+log = get_logger()
 
 
 @dataclass
@@ -115,3 +118,91 @@ def consensus_box(burst: Burst):
         median(b[2] for b in boxes),
         median(b[3] for b in boxes),
     )
+
+
+# ---- grouping strategies -------------------------------------------------
+
+class GroupingStrategy:
+    """How frames become bursts, plus the subject region used to score each frame.
+
+    The strategy only carries per-mode policy — which grouping function to call, where the
+    subject region is, the cache tag — and delegates the actual grouping to the module
+    functions above. `groups_before_decode` is the one fact the Scorer needs to sequence a
+    run: time grouping reads only timestamps, so it can group before any pixels are decoded
+    (and decode one burst at a time); similarity grouping reads perceptual hashes, so every
+    frame must be decoded first. `region` shares the whole/center modes here; subclasses add
+    the auto (face-driven) region.
+    """
+
+    groups_before_decode = True
+    method = "?"
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def group(self, frames):
+        raise NotImplementedError
+
+    def region(self, burst, frame, mode):
+        if mode == "whole":
+            return None
+        if mode == "center":
+            return (0.25, 0.25, 0.5, 0.5)
+        return self._auto_region(burst, frame)
+
+    def _auto_region(self, burst, frame):
+        raise NotImplementedError
+
+    def log_grouped(self, groups):
+        raise NotImplementedError
+
+
+class TimeGrouping(GroupingStrategy):
+    """Capture-time gap bursts; one locked consensus region scores every frame in a burst."""
+
+    groups_before_decode = True
+    method = "time"
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.tag = cfg.gap_seconds   # cache discriminator: the gap invalidates locked-region sharpness
+
+    def group(self, frames):
+        return group_into_bursts(frames, self.cfg.gap_seconds)
+
+    def _auto_region(self, burst, frame):
+        return consensus_box(burst)
+
+    def log_grouped(self, groups):
+        singles = sum(1 for g in groups if g.is_single)
+        log.info("grouped", method="time", groups=len(groups), singles=singles,
+                 bursts=len(groups) - singles, gap_seconds=self.cfg.gap_seconds)
+
+
+class SimilarityGrouping(GroupingStrategy):
+    """Near-duplicate clusters by perceptual-hash distance; each frame scored on its own box."""
+
+    groups_before_decode = False
+    method = "similarity"
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.tag = "sim"
+
+    def group(self, frames):
+        return group_by_similarity(frames, self.cfg.sim_max_distance, self.cfg.sim_time_ceiling)
+
+    def _auto_region(self, burst, frame):
+        return frame.primary_box or (0.25, 0.25, 0.5, 0.5)
+
+    def log_grouped(self, groups):
+        singles = sum(1 for g in groups if g.is_single)
+        log.info("grouped", method="similarity", groups=len(groups), singles=singles,
+                 clusters=len(groups) - singles, max_distance=self.cfg.sim_max_distance)
+
+
+def grouping_for(cfg) -> GroupingStrategy:
+    """Pick the grouping strategy named by cfg.group_method (default: time)."""
+    if cfg.group_method == "similarity":
+        return SimilarityGrouping(cfg)
+    return TimeGrouping(cfg)

@@ -18,6 +18,15 @@ detected automatically from the time gap between consecutive frames; length vari
 many frames), it is never a fixed count.
 _Avoid_: sequence, series, batch, set
 
+**Grouping strategy**:
+How frames are gathered into [[Burst]]s, chosen with `--group`. **time** splits on the
+capture-time gap between frames — metadata only, so it can group before any pixels are read.
+**similarity** clusters near-duplicate frames by perceptual-hash distance — camera-agnostic,
+but must read pixels first to hash them. The strategy also fixes where [[Sharpness]] is
+measured: time on one region locked across the whole burst, similarity on each frame's own
+[[Subject]] box. (See `docs/adr/0004`.)
+_Avoid_: clustering (as the user-facing name), mode
+
 **Single**:
 A frame with no burst neighbours — the only shot of its moment. Judged on absolute quality
 thresholds, since it has no peers to rank against.
