@@ -15,6 +15,7 @@ from . import sharpness as sharp
 from .binning import bin_burst
 from .bursts import Frame, consensus_box, group_by_similarity, group_into_bursts
 from .config import Config
+from .detect import FaceDetector
 from .exif import read_capture
 from .log import get_logger
 from .phash import dhash
@@ -71,10 +72,9 @@ def _region_for_frame(fr, mode: str):
     return fr.primary_box or (0.25, 0.25, 0.5, 0.5)
 
 
-def _measure(fr, gray, rgb_down, cfg):
+def _measure(fr, gray, rgb_down, detector, cfg):
     """Per-frame, group-independent measurements: faces, eyes, exposure."""
-    faces = detect.detect_faces(rgb_down, cfg.max_faces, cfg.min_face_frac,
-                                cfg.yunet_score, cfg.foreground_ratio)
+    faces = detector.faces(rgb_down)
     fr.faces = faces
     fr.face_count = len(faces)
     fr.primary_box = max((f.box for f in faces), key=lambda b: b[2] * b[3]) if faces else None
@@ -100,13 +100,13 @@ def _cache_row(fr, tag):
     }
 
 
-def _scan(source_root, subject_mode, cfg):
+def _scan(source_root, subject_mode, cfg, detector):
     paths = sorted(p for p in source_root.rglob("*") if p.suffix.lower() in IMG_EXT)
     log.info("scan", images=len(paths), root=str(source_root),
              subject_mode=subject_mode, group=cfg.group_method)
-    if not detect.detector_available():
+    if not detector.available:
         log.warning("face_detector_unavailable", note="no faces; sharpness + exposure only")
-    elif not detect.eyes_available():
+    elif not detector.eyes_available:
         log.warning("eyes_unavailable", note="faces detected but eye gate disabled")
     frames = []
     for p in paths:
@@ -119,15 +119,16 @@ def _scan(source_root, subject_mode, cfg):
 
 
 def score(source_root, cfg: Config, manifest_path, cache_path, resume: bool = True,
-          subject_mode: str = "auto"):
+          subject_mode: str = "auto", detector=None):
     source_root = Path(source_root)
-    frames = _scan(source_root, subject_mode, cfg)
+    detector = detector or FaceDetector(cfg)
+    frames = _scan(source_root, subject_mode, cfg, detector)
     if cfg.group_method == "similarity":
-        return _score_similarity(frames, cfg, manifest_path, cache_path, resume, subject_mode)
-    return _score_time(frames, cfg, manifest_path, cache_path, resume, subject_mode)
+        return _score_similarity(frames, cfg, manifest_path, cache_path, resume, subject_mode, detector)
+    return _score_time(frames, cfg, manifest_path, cache_path, resume, subject_mode, detector)
 
 
-def _score_time(frames, cfg, manifest_path, cache_path, resume, subject_mode):
+def _score_time(frames, cfg, manifest_path, cache_path, resume, subject_mode, detector):
     bursts = group_into_bursts(frames, cfg.gap_seconds)
     singles = sum(1 for b in bursts if b.is_single)
     log.info("grouped", method="time", groups=len(bursts), singles=singles,
@@ -150,7 +151,7 @@ def _score_time(frames, cfg, manifest_path, cache_path, resume, subject_mode):
                 if gray is None:
                     log.warning("decode_failed", rel=fr.rel)
                     continue
-                _measure(fr, gray, rgb_down, cfg)
+                _measure(fr, gray, rgb_down, detector, cfg)
                 decoded += 1
                 log.debug("measured", rel=fr.rel, faces=fr.face_count,
                           eye_score=None if fr.eye_score is None else round(fr.eye_score, 3),
@@ -171,7 +172,7 @@ def _score_time(frames, cfg, manifest_path, cache_path, resume, subject_mode):
     return _emit(bursts, cfg, manifest_path)
 
 
-def _score_similarity(frames, cfg, manifest_path, cache_path, resume, subject_mode):
+def _score_similarity(frames, cfg, manifest_path, cache_path, resume, subject_mode, detector):
     # Single decode pass: per-frame measurements + perceptual hash + per-frame-region sharpness.
     cache = manifest.load_cache(cache_path, "sim") if resume else {}
     writer = manifest.CacheWriter(cache_path, resume)
@@ -189,7 +190,7 @@ def _score_similarity(frames, cfg, manifest_path, cache_path, resume, subject_mo
                 writer.append(_cache_row(fr, "sim"))
                 continue
             fr.phash = dhash(gray, cfg.phash_size)
-            _measure(fr, gray, rgb_down, cfg)
+            _measure(fr, gray, rgb_down, detector, cfg)
             fr.sharpness = sharp.laplacian_variance(gray, _region_for_frame(fr, subject_mode))
             decoded += 1
             log.debug("measured", rel=fr.rel, faces=fr.face_count,

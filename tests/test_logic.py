@@ -5,10 +5,14 @@ rule, and manifest/cache behavior. They run anywhere numpy+Pillow are installed.
 """
 from datetime import datetime, timedelta
 
+from PIL import Image
+
 from bestphoto import manifest
 from bestphoto.binning import bin_burst
 from bestphoto.bursts import Burst, Frame, group_by_similarity, group_into_bursts
 from bestphoto.config import Config
+from bestphoto.detect import Face
+from bestphoto.pipeline import score
 
 T0 = datetime(2026, 6, 19, 12, 0, 0)
 
@@ -16,6 +20,24 @@ T0 = datetime(2026, 6, 19, 12, 0, 0)
 def mk(name, t=None, phash=0, faces=0, eye=None, sharp=0.0, exp=False):
     return Frame(path=name, rel=name, when=t, mtime=0.0, size=0,
                  face_count=faces, eye_score=eye, sharpness=sharp, exposure_flag=exp, phash=phash)
+
+
+class FakeDetector:
+    """Stands in for a real FaceDetector at score()'s seam — returns canned faces for every
+    frame, no models. The seam is what makes this possible: no monkeypatching, no mediapipe."""
+
+    available = True
+    eyes_available = True
+
+    def __init__(self, faces):
+        self._faces = faces
+
+    def faces(self, rgb):
+        return list(self._faces)
+
+
+def _make_jpeg(path):
+    Image.new("RGB", (64, 64), (128, 128, 128)).save(path, "JPEG")  # flat mid-grey: no exposure flag
 
 
 # ---- grouping ------------------------------------------------------------
@@ -100,6 +122,29 @@ def test_manifest_roundtrip(tmp_path):
                                  "bin": "keeper", "reason": "x", "sharpness": "1.0"}])
     back = manifest.read_manifest_rows(p)
     assert back[0]["bin"] == "keeper" and back[0]["filename"] == "a.jpg"
+
+
+# ---- score seam (FaceDetector injection) --------------------------------
+
+def _score_one(tmp_path, face):
+    """Score a single synthetic photo through score() with an injected FakeDetector;
+    return that photo's manifest row."""
+    _make_jpeg(tmp_path / "p.jpg")
+    m = tmp_path / "manifest.csv"
+    score(tmp_path, Config(), m, tmp_path / "cache.csv",
+          resume=False, detector=FakeDetector([face]))
+    return {r["filename"]: r for r in manifest.read_manifest_rows(m)}["p.jpg"]
+
+
+def test_score_gates_closed_eye_portrait(tmp_path):
+    row = _score_one(tmp_path, Face(box=(0.25, 0.25, 0.5, 0.5), area=0.25, open_prob=0.0))
+    assert row["bin"] == "rejected" and "eyes" in row["reason"]
+    assert row["face_count"] == "1"
+
+
+def test_score_open_eye_portrait_not_rejected(tmp_path):
+    row = _score_one(tmp_path, Face(box=(0.25, 0.25, 0.5, 0.5), area=0.25, open_prob=1.0))
+    assert row["bin"] != "rejected"     # eyes open -> gate passes; injected open_prob flows through
 
 
 def test_cache_tag_isolates_time_and_similarity(tmp_path):
