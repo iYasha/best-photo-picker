@@ -19,6 +19,13 @@ faces = ["mediapipe>=0.10"]
 [dependency-groups]
 dev = ["pytest>=8"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Golden tests re-score real photos with ML models (~30s); deselect by default.
+# Run them explicitly with:  uv run pytest -m slow   (or -m "" for everything)
+addopts = "-m 'not slow'"
+markers = ["slow: re-scores real photos with mediapipe/YuNet (opt-in)"]
+
 [project.scripts]
 bestphoto = "bestphoto.cli:main"
 

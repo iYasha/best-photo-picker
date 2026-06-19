@@ -20,7 +20,10 @@ REGEN = os.environ.get("BPP_REGEN") == "1"
 
 MODES = [("time", "manifest_time.csv"), ("similarity", "manifest_sim.csv")]
 
-pytestmark = pytest.mark.skipif(not PHOTOS.exists(), reason=f"no photos at {PHOTOS}")
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(not PHOTOS.exists(), reason=f"no photos at {PHOTOS}"),
+]
 
 
 def _by_file(path):
