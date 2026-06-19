@@ -16,6 +16,9 @@ class Config:
     keep_per_burst: int = 1
     downscale_long_edge: int = 1280
     max_faces: int = 6
+    min_face_frac: float = 0.005   # absolute floor: ignore faces below this fraction of the frame
+    foreground_ratio: float = 0.6  # keep faces >= this fraction of the largest face's area
+    yunet_score: float = 0.6       # YuNet detection confidence threshold
     eye_open_min: float = 0.50   # per-face open_prob (1 - blink) at/above this counts as open
     open_gate: float = 0.50      # size-weighted open fraction below this fails the portrait gate
     blown_value: int = 250
@@ -44,6 +47,9 @@ class Config:
             keep_per_burst=select.get("keep_per_burst", d.keep_per_burst),
             downscale_long_edge=detect.get("downscale_long_edge", d.downscale_long_edge),
             max_faces=detect.get("max_faces", d.max_faces),
+            min_face_frac=detect.get("min_face_frac", d.min_face_frac),
+            foreground_ratio=detect.get("foreground_ratio", d.foreground_ratio),
+            yunet_score=detect.get("yunet_score", d.yunet_score),
             eye_open_min=eyes.get("eye_open_min", d.eye_open_min),
             open_gate=eyes.get("open_gate", d.open_gate),
             blown_value=exp.get("blown_value", d.blown_value),

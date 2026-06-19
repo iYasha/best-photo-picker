@@ -1,10 +1,12 @@
-"""Image decode (EXIF-orientation aware) and face/eye detection via MediaPipe Tasks.
+"""Image decode + face/eye detection.
 
-Uses the FaceLandmarker task (the legacy `mp.solutions` API was removed in mediapipe 0.10.x).
-Eye openness comes from the `eyeBlink` blendshapes, not a hand-rolled aspect ratio.
+Two models, each used for what it's good at:
+- **YuNet** (`cv2.FaceDetectorYN`) finds face boxes — robust on real scene photos and across
+  scales, where MediaPipe's selfie-tuned detector silently drops faces.
+- **MediaPipe FaceLandmarker** runs on each face crop to read eye-open from blendshapes.
 
-The task needs a model bundle (`face_landmarker.task`, ~4MB). It is resolved from the
-BPP_FACE_MODEL env var, else cached under ~/.cache/best-photo-picker/ and fetched on first use.
+Both model bundles are resolved from env vars, else cached under ~/.cache/best-photo-picker/
+and fetched on first use.
 """
 from __future__ import annotations
 
@@ -20,85 +22,108 @@ from .log import get_logger
 
 log = get_logger()
 
-_MODEL_URL = (
+_LANDMARKER_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/1/face_landmarker.task"
 )
+_YUNET_URL = (
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/"
+    "models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+)
 
-_DEFAULT_FACES = 6        # matches Config.max_faces; used only for the availability probe
 _landmarker = None
-_built_faces: "int | None" = None
-_init_failed = False
-_mp = None                # the mediapipe module, for building mp.Image
+_landmarker_failed = False
+_mp = None              # mediapipe module, for building mp.Image
+_yunet = None
+_yunet_failed = False
 
 
-def _model_path() -> Path:
-    env = os.environ.get("BPP_FACE_MODEL")
-    if env:
-        return Path(env)
-    cache = Path.home() / ".cache" / "best-photo-picker"
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache / "face_landmarker.task"
+def _cache_dir() -> Path:
+    d = Path.home() / ".cache" / "best-photo-picker"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-def _ensure_model() -> "Path | None":
-    p = _model_path()
-    if p.exists() and p.stat().st_size > 0:
-        return p
+def _fetch(url: str, dest: Path, what: str) -> "Path | None":
+    if dest.exists() and dest.stat().st_size > 0:
+        return dest
     try:
-        log.info("face_model_download", url=_MODEL_URL, dest=str(p))
-        urllib.request.urlretrieve(_MODEL_URL, p)
-        return p
+        log.info("model_download", model=what, url=url, dest=str(dest))
+        urllib.request.urlretrieve(url, dest)
+        return dest
     except Exception as e:
-        log.warning("face_model_download_failed", error=str(e),
-                    hint="set BPP_FACE_MODEL to a local face_landmarker.task")
+        log.warning("model_download_failed", model=what, error=str(e))
         return None
 
 
-def _get_landmarker(max_faces: int):
-    """Build (once) a FaceLandmarker for the given face cap; rebuild if the cap changes.
-    A failed init is sticky so we don't retry on every photo."""
-    global _landmarker, _built_faces, _init_failed, _mp
-    if _init_failed:
+# ---- YuNet face detector -------------------------------------------------
+
+def _get_yunet():
+    global _yunet, _yunet_failed
+    if _yunet_failed:
         return None
-    if _landmarker is not None and _built_faces == max_faces:
+    if _yunet is not None:
+        return _yunet
+    try:
+        import cv2
+
+        path = Path(os.environ.get("BPP_FACE_DETECTOR") or _cache_dir() / "yunet_face_2023mar.onnx")
+        model = _fetch(_YUNET_URL, path, "yunet")
+        if model is None:
+            _yunet_failed = True
+            return None
+        _yunet = cv2.FaceDetectorYN.create(str(model), "", (320, 320), 0.6, 0.3, 5000)
+    except Exception as e:
+        log.warning("yunet_init_failed", error=str(e))
+        _yunet_failed = True
+    return _yunet
+
+
+def detector_available() -> bool:
+    return _get_yunet() is not None
+
+
+# ---- MediaPipe FaceLandmarker (eyes) -------------------------------------
+
+def _get_landmarker():
+    global _landmarker, _landmarker_failed, _mp
+    if _landmarker_failed:
+        return None
+    if _landmarker is not None:
         return _landmarker
     try:
         import mediapipe as mp
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision
 
-        model = _ensure_model()
+        path = Path(os.environ.get("BPP_FACE_MODEL") or _cache_dir() / "face_landmarker.task")
+        model = _fetch(_LANDMARKER_URL, path, "face_landmarker")
         if model is None:
-            _init_failed = True
+            _landmarker_failed = True
             return None
         options = vision.FaceLandmarkerOptions(
             base_options=mp_python.BaseOptions(model_asset_path=str(model)),
             output_face_blendshapes=True,
-            num_faces=max_faces,
+            num_faces=1,            # always run on a single-face crop
             running_mode=vision.RunningMode.IMAGE,
         )
-        if _landmarker is not None:
-            _landmarker.close()
         _landmarker = vision.FaceLandmarker.create_from_options(options)
-        _built_faces = max_faces
         _mp = mp
     except Exception as e:
         log.warning("face_landmarker_init_failed", error=str(e))
-        _landmarker = None
-        _init_failed = True
+        _landmarker_failed = True
     return _landmarker
 
 
-def mediapipe_available() -> bool:
-    return _get_landmarker(_DEFAULT_FACES) is not None
+def eyes_available() -> bool:
+    return _get_landmarker() is not None
 
 
 @dataclass
 class Face:
     box: tuple        # normalized (x, y, w, h)
-    area: float       # normalized area
-    open_prob: float  # 1 - max(eyeBlinkLeft, eyeBlinkRight); 1.0 = wide open, 0.0 = shut
+    area: float       # normalized area (fraction of frame)
+    open_prob: float  # 1 - max(eyeBlinkLeft, eyeBlinkRight); 1.0 wide open, 0.0 shut
 
 
 def load_image(path, long_edge: int):
@@ -120,30 +145,69 @@ def load_image(path, long_edge: int):
 
 
 def _blink(blendshapes) -> float:
-    """Max of the two eye-blink blendshape scores (0 open .. 1 shut)."""
     vals = [c.score for c in blendshapes if c.category_name in ("eyeBlinkLeft", "eyeBlinkRight")]
     return max(vals) if vals else 0.0
 
 
-def detect_faces(rgb: np.ndarray, max_faces: int):
-    """Detect faces; return list[Face] with normalized boxes and eye-open probability.
-    Returns [] when no model/faces."""
-    lm = _get_landmarker(max_faces)
-    if lm is None or rgb is None:
+def _eye_open_for(rgb: np.ndarray, box_px) -> float:
+    """Run FaceLandmarker on a padded crop of one face; return open prob (1.0 if unknown)."""
+    lm = _get_landmarker()
+    if lm is None:
+        return 1.0
+    h, w = rgb.shape[:2]
+    x, y, bw, bh = box_px
+    mx, my = bw * 0.4, bh * 0.4
+    x0, y0 = max(0, int(x - mx)), max(0, int(y - my))
+    x1, y1 = min(w, int(x + bw + mx)), min(h, int(y + bh + my))
+    crop = np.ascontiguousarray(rgb[y0:y1, x0:x1])
+    if crop.size == 0:
+        return 1.0
+    try:
+        res = lm.detect(_mp.Image(image_format=_mp.ImageFormat.SRGB, data=crop))
+    except Exception:
+        return 1.0
+    if not res.face_blendshapes:
+        return 1.0
+    return 1.0 - _blink(res.face_blendshapes[0])
+
+
+def detect_faces(rgb: np.ndarray, max_faces: int = 6, min_face_frac: float = 0.005,
+                 score_thresh: float = 0.6, foreground_ratio: float = 0.6):
+    """Detect faces with YuNet, then read eye-open per face. Keeps only foreground faces:
+    those at least `foreground_ratio` of the largest face's area (faces at the same distance
+    are similar size; background people are much smaller), with `min_face_frac` as an absolute
+    floor for the degenerate all-far case."""
+    yn = _get_yunet()
+    if yn is None or rgb is None:
         return []
-    image = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
-    res = lm.detect(image)
-    if not res.face_landmarks:
+    import cv2
+
+    h, w = rgb.shape[:2]
+    frame_area = float(w * h)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    yn.setInputSize((w, h))
+    try:
+        yn.setScoreThreshold(score_thresh)
+    except Exception:
+        pass
+    _, faces = yn.detect(bgr)
+    if faces is None:
         return []
-    faces = []
-    blends = res.face_blendshapes or []
-    for i, marks in enumerate(res.face_landmarks):
-        xs = [p.x for p in marks]
-        ys = [p.y for p in marks]
-        x0, x1 = min(xs), max(xs)
-        y0, y1 = min(ys), max(ys)
-        box = (x0, y0, x1 - x0, y1 - y0)
-        area = max(0.0, x1 - x0) * max(0.0, y1 - y0)
-        blink = _blink(blends[i]) if i < len(blends) else 0.0
-        faces.append(Face(box=box, area=area, open_prob=1.0 - blink))
-    return faces
+
+    rows = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
+    if not rows:
+        return []
+    max_frac = (rows[0][2] * rows[0][3]) / frame_area
+    keep_frac = max(min_face_frac, foreground_ratio * max_frac)
+
+    out = []
+    for f in rows:
+        if len(out) >= max_faces:
+            break
+        x, y, bw, bh = float(f[0]), float(f[1]), float(f[2]), float(f[3])
+        area_frac = (bw * bh) / frame_area
+        if area_frac < keep_frac:
+            continue
+        nb = (x / w, y / h, bw / w, bh / h)
+        out.append(Face(box=nb, area=area_frac, open_prob=_eye_open_for(rgb, (x, y, bw, bh))))
+    return out

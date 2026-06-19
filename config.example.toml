@@ -10,6 +10,9 @@ keep_per_burst = 1           # how many top frames per burst go to keepers/
 [detect]
 downscale_long_edge = 1280   # face detection runs at this size (speed); sharpness uses full res
 max_faces = 6
+min_face_frac = 0.005        # absolute floor: ignore faces below this fraction of the frame
+foreground_ratio = 0.6       # keep only faces >= this fraction of the largest face (foreground)
+yunet_score = 0.6            # YuNet detection confidence threshold
 
 [eyes]
 eye_open_min = 0.50          # per-face open prob (1 - blink); at/above this the eyes count as open

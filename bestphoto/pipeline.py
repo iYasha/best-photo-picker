@@ -62,8 +62,10 @@ def score(source_root, cfg: Config, manifest_path, cache_path, resume: bool = Tr
     source_root = Path(source_root)
     paths = sorted(p for p in source_root.rglob("*") if p.suffix.lower() in IMG_EXT)
     log.info("scan", images=len(paths), root=str(source_root), subject_mode=subject_mode)
-    if not detect.mediapipe_available():
-        log.warning("mediapipe_unavailable", note="sharpness + exposure only; eye gate disabled")
+    if not detect.detector_available():
+        log.warning("face_detector_unavailable", note="no faces; sharpness + exposure only")
+    elif not detect.eyes_available():
+        log.warning("eyes_unavailable", note="faces detected but eye gate disabled")
 
     frames = []
     for p in paths:
@@ -97,7 +99,8 @@ def score(source_root, cfg: Config, manifest_path, cache_path, resume: bool = Tr
                 if gray is None:
                     log.warning("decode_failed", rel=fr.rel)
                     continue
-                faces = detect.detect_faces(rgb_down, cfg.max_faces)
+                faces = detect.detect_faces(rgb_down, cfg.max_faces, cfg.min_face_frac,
+                                            cfg.yunet_score, cfg.foreground_ratio)
                 fr.faces = faces
                 fr.face_count = len(faces)
                 fr.primary_box = max((f.box for f in faces), key=lambda b: b[2] * b[3]) if faces else None
