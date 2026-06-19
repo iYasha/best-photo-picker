@@ -76,17 +76,29 @@ class Scorer:
         self.resume = resume
         self.subject_mode = subject_mode
 
-    def run(self, frames, strategy):
+    def run(self, frames, strategy, on_progress=None):
+        total = len(frames)
+        done = 0
+
+        def report(fr):
+            """Tick one frame as processed. Fires live as the Scorer decodes/measures
+            (not after), so a `--json` consumer's progress bar advances through the
+            slow pass. No-op when `on_progress` is None (the plain `score` path)."""
+            nonlocal done
+            done += 1
+            if on_progress is not None:
+                on_progress(done, total, Path(fr.rel).name, "")
+
         with manifest.MeasurementCache(self.cache_path, strategy.tag, self.resume) as cache:
             run = _Run(cache=cache)
             if strategy.groups_before_decode:
-                groups = self._group_then_score(run, frames, strategy)
+                groups = self._group_then_score(run, frames, strategy, report)
             else:
-                groups = self._score_then_group(run, frames, strategy)
+                groups = self._score_then_group(run, frames, strategy, report)
         log.info("decoded", new=run.decoded, from_cache=len(frames) - run.decoded)
         return groups
 
-    def _group_then_score(self, run, frames, strategy):
+    def _group_then_score(self, run, frames, strategy, report):
         """Time: group on timestamps, then decode each burst and score it on one locked region."""
         groups = strategy.group(frames)
         strategy.log_grouped(groups)
@@ -94,13 +106,16 @@ class Scorer:
             held = {}  # id(frame) -> full-res gray for frames decoded this run
             for fr in burst.frames:
                 if self._fill_if_cached(run, fr):
+                    report(fr)
                     continue
                 gray, rgb_down = decode.load_image(fr.path, self.cfg.downscale_long_edge)
                 held[id(fr)] = gray
                 if gray is None:
                     log.warning("decode_failed", rel=fr.rel)
+                    report(fr)
                     continue
                 self._measure(run, fr, gray, rgb_down)
+                report(fr)
             resolve = strategy.subject_region(self.subject_mode, burst=burst)
             log.debug("burst", id=burst.id, frames=len(burst.frames), region=_round_box(resolve(None)))
             for fr in burst.frames:
@@ -112,21 +127,24 @@ class Scorer:
             held.clear()
         return groups
 
-    def _score_then_group(self, run, frames, strategy):
+    def _score_then_group(self, run, frames, strategy, report):
         """Similarity: decode every frame (phash + own-box sharpness), then group on phash."""
         resolve = strategy.subject_region(self.subject_mode)   # per-frame, no burst yet
         for fr in frames:
             if self._fill_if_cached(run, fr):
+                report(fr)
                 continue
             gray, rgb_down = decode.load_image(fr.path, self.cfg.downscale_long_edge)
             if gray is None:
                 log.warning("decode_failed", rel=fr.rel)
                 run.cache.put(fr)
+                report(fr)
                 continue
             self._measure(run, fr, gray, rgb_down)   # replaces fr.m, so phash + sharpness go on after
             fr.m.phash = dhash(gray, self.cfg.phash_size)
             fr.m.sharpness = sharp.laplacian_variance(gray, resolve(fr))
             run.cache.put(fr)
+            report(fr)
         groups = strategy.group(frames)
         strategy.log_grouped(groups)
         return groups

@@ -1,0 +1,25 @@
+import Foundation
+
+enum Icon {
+    static let newSession = "plus"
+    static let settings = "gearshape"
+    static let lock = "lock.fill"
+    static let folder = "folder"
+    static let folderOpen = "folder.fill"
+    static let star = "star.fill"
+    static let starOutline = "star"
+    static let groupingTime = "clock"
+    static let groupingSimilarity = "square.on.square"
+    static let exposureWarning = "triangle.fill"
+    static let chevronLeft = "chevron.left"
+    static let chevronRight = "chevron.right"
+    static let close = "xmark"
+    static let zoom = "arrow.up.left.and.arrow.down.right"
+    static let check = "checkmark"
+    static let warning = "exclamationmark.triangle"
+    static let search = "magnifyingglass"
+    static let back = "arrow.left"
+    static let chevronExpanded = "chevron.down"
+    static let chevronCollapsed = "chevron.right"
+    static let arrowRight = "arrow.right"
+}

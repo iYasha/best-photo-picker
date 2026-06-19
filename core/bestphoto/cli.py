@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-from . import contact, log, pipeline, review
+from . import contact, jsonout, log, pipeline, review
 from .config import Config
 
 _PATH = click.Path(path_type=Path)
@@ -38,8 +38,11 @@ def main():
               help="subject-region mode for sharpness (default auto: face->centre fallback)")
 @click.option("--cache", type=_PATH, default=Path(".bpp-cache.csv"), help="resumable measurement cache")
 @click.option("--no-resume", is_flag=True, help="ignore the cache and rescore everything")
+@click.option("--json", "as_json", is_flag=True,
+              help="emit the machine JSON contract on stdout (JSON-lines progress, then the "
+                   "final result doc); the CSV manifest is still written (ADR 0008)")
 @_verbose
-def score(source, config_path, manifest, group, keep, subject, cache, no_resume):
+def score(source, config_path, manifest, group, keep, subject, cache, no_resume, as_json):
     cfg = Config.load(config_path)
     overrides = {}
     if keep is not None:
@@ -48,7 +51,13 @@ def score(source, config_path, manifest, group, keep, subject, cache, no_resume)
         overrides["group_method"] = group
     if overrides:
         cfg = cfg.model_copy(update=overrides)
-    pipeline.score(source, cfg, manifest, cache, resume=not no_resume, subject_mode=subject)
+    if as_json:
+        # stdout is the JSON wire; logs go to stderr so they never corrupt the stream.
+        jsonout.logs_to_stderr()
+        jsonout.score_to_json(source, cfg, manifest, cache,
+                              resume=not no_resume, subject_mode=subject)
+    else:
+        pipeline.score(source, cfg, manifest, cache, resume=not no_resume, subject_mode=subject)
 
 
 @main.command("review", help="stage manifest bins as symlinks for inspection")
