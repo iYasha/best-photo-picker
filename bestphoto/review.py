@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 
 from .log import get_logger
-from .manifest import read_manifest_rows
+from .manifest import read_manifest
 
 log = get_logger()
 
@@ -38,7 +38,7 @@ def _symlink_supported(d: Path) -> bool:
 
 
 def stage(manifest_path, source_root, out_dir, bins=("keeper", "maybe"), use_copy=False):
-    rows = read_manifest_rows(manifest_path)
+    rows = read_manifest(manifest_path)
     out_dir = Path(out_dir)
     source_root = Path(source_root)
 
@@ -50,17 +50,17 @@ def stage(manifest_path, source_root, out_dir, bins=("keeper", "maybe"), use_cop
 
     made = {b: 0 for b in bins}
     for r in rows:
-        b = r["bin"]
+        b = r.bin
         if b not in bins:
             continue
-        target = (source_root / r["rel"]).resolve()
-        bid, fname = r["burst_id"], Path(r["rel"]).name
+        target = (source_root / r.rel).resolve()
+        bid, fname = r.burst_id, r.filename
         if b == "keeper":
             dest_dir, name = out_dir / "keepers", f"b{bid}_{fname}"
         elif b == "maybe":
             dest_dir, name = out_dir / "maybe" / f"b{bid}", fname
         else:
-            dest_dir, name = out_dir / "rejected", f"{_slug(r['reason'])}_{fname}"
+            dest_dir, name = out_dir / "rejected", f"{_slug(r.reason)}_{fname}"
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / name
         if dest.is_symlink() or dest.exists():

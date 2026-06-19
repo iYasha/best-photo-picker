@@ -9,7 +9,7 @@ from PIL import Image
 
 from bestphoto import manifest
 from bestphoto.binning import bin_burst
-from bestphoto.bursts import Burst, Frame, SimilarityGrouping, TimeGrouping
+from bestphoto.bursts import Burst, Frame, Measurement, SimilarityGrouping, TimeGrouping
 from bestphoto.config import Config
 from bestphoto.detect import Face
 from bestphoto.pipeline import score
@@ -19,7 +19,8 @@ T0 = datetime(2026, 6, 19, 12, 0, 0)
 
 def mk(name, t=None, phash=0, faces=0, eye=None, sharp=0.0, exp=False):
     return Frame(path=name, rel=name, when=t, mtime=0.0, size=0,
-                 face_count=faces, eye_score=eye, sharpness=sharp, exposure_flag=exp, phash=phash)
+                 m=Measurement(face_count=faces, eye_score=eye, sharpness=sharp,
+                               exposure_flag=exp, phash=phash))
 
 
 class FakeDetector:
@@ -120,8 +121,9 @@ def test_manifest_roundtrip(tmp_path):
     p = tmp_path / "m.csv"
     manifest.write_manifest(p, [{"rel": "a.jpg", "filename": "a.jpg", "burst_id": 0,
                                  "bin": "keeper", "reason": "x", "sharpness": "1.0"}])
-    back = manifest.read_manifest_rows(p)
-    assert back[0]["bin"] == "keeper" and back[0]["filename"] == "a.jpg"
+    back = manifest.read_manifest(p)
+    assert back[0].bin == "keeper" and back[0].filename == "a.jpg"
+    assert back[0].burst_id == 0 and back[0].sharpness == 1.0   # typed, not strings
 
 
 # ---- score seam (FaceDetector injection) --------------------------------
@@ -133,7 +135,7 @@ def _score_one(tmp_path, face):
     m = tmp_path / "manifest.csv"
     score(tmp_path, Config(), m, tmp_path / "cache.csv",
           resume=False, detector=FakeDetector([face]))
-    return {r["filename"]: r for r in manifest.read_manifest_rows(m)}["p.jpg"]
+    return {r.filename: r for r in manifest.read_manifest(m)}["p.jpg"]
 
 
 def test_facedetector_composes_locator_and_eyes():
@@ -163,13 +165,13 @@ def test_facedetector_composes_locator_and_eyes():
 
 def test_score_gates_closed_eye_portrait(tmp_path):
     row = _score_one(tmp_path, Face(box=(0.25, 0.25, 0.5, 0.5), area=0.25, open_prob=0.0))
-    assert row["bin"] == "rejected" and "eyes" in row["reason"]
-    assert row["face_count"] == "1"
+    assert row.bin == "rejected" and "eyes" in row.reason
+    assert row.face_count == 1
 
 
 def test_score_open_eye_portrait_not_rejected(tmp_path):
     row = _score_one(tmp_path, Face(box=(0.25, 0.25, 0.5, 0.5), area=0.25, open_prob=1.0))
-    assert row["bin"] != "rejected"     # eyes open -> gate passes; injected open_prob flows through
+    assert row.bin != "rejected"     # eyes open -> gate passes; injected open_prob flows through
 
 
 def _cache_frame(sharp):

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
+from . import eyes
 from .bursts import Burst
 from .config import Config
 
@@ -38,8 +39,7 @@ def bin_burst(burst: Burst, cfg: Config) -> "dict[object, Verdict]":
             has_faces
             and not is_group
             and f.face_count >= 1
-            and f.eye_score is not None
-            and f.eye_score < cfg.open_gate
+            and eyes.gate_fails(f.eye_score, cfg)
         )
         for f in frames
     }
@@ -76,7 +76,7 @@ def bin_burst(burst: Burst, cfg: Config) -> "dict[object, Verdict]":
 
 
 def _verdict_single(f, cfg: Config) -> Verdict:
-    if f.face_count == 1 and f.eye_score is not None and f.eye_score < cfg.open_gate:
+    if f.face_count == 1 and eyes.gate_fails(f.eye_score, cfg):
         return Verdict("rejected", "single, eyes closed", 0)
     if f.sharpness < cfg.single_sharpness_floor:
         # Absolute sharpness is scene-dependent and unreliable -> surface, don't bury.

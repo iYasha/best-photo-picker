@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import detect, manifest
+from . import detect, eyes, manifest
 from . import sharpness as sharp
 from .binning import bin_burst
-from .bursts import Frame, grouping_for
+from .bursts import Frame, Measurement, grouping_for
 from .config import Config
 from .detect import FaceDetector
 from .exif import read_capture
@@ -28,17 +28,6 @@ log = get_logger()
 
 def _round_box(box):
     return tuple(round(v, 3) for v in box) if box else "whole"
-
-
-def _eye_score(faces, cfg):
-    """Size-weighted fraction of faces with open eyes. None when no face."""
-    if not faces:
-        return None
-    den = sum(f.area for f in faces)
-    if den <= 0:
-        return None
-    num = sum(f.area * (1.0 if f.open_prob >= cfg.eye_open_min else 0.0) for f in faces)
-    return num / den
 
 
 def _scan(source_root, subject_mode, cfg, detector):
@@ -102,19 +91,20 @@ class Scorer:
                     log.warning("decode_failed", rel=fr.rel)
                     continue
                 self._measure(fr, gray, rgb_down)
-            box = strategy.region(burst, None, self.subject_mode)
-            log.debug("burst", id=burst.id, frames=len(burst.frames), region=_round_box(box))
+            resolve = strategy.subject_region(self.subject_mode, burst=burst)
+            log.debug("burst", id=burst.id, frames=len(burst.frames), region=_round_box(resolve(None)))
             for fr in burst.frames:
                 if self._cache.has(fr):
                     continue
                 gray = held.get(id(fr))
-                fr.sharpness = sharp.laplacian_variance(gray, box) if gray is not None else 0.0
+                fr.m.sharpness = sharp.laplacian_variance(gray, resolve(fr)) if gray is not None else 0.0
                 self._cache.put(fr)
             held.clear()
         return groups
 
     def _score_then_group(self, frames, strategy):
         """Similarity: decode every frame (phash + own-box sharpness), then group on phash."""
+        resolve = strategy.subject_region(self.subject_mode)   # per-frame, no burst yet
         for fr in frames:
             if self._fill_if_cached(fr):
                 continue
@@ -123,9 +113,9 @@ class Scorer:
                 log.warning("decode_failed", rel=fr.rel)
                 self._cache.put(fr)
                 continue
-            fr.phash = dhash(gray, self.cfg.phash_size)
-            self._measure(fr, gray, rgb_down)
-            fr.sharpness = sharp.laplacian_variance(gray, strategy.region(None, fr, self.subject_mode))
+            self._measure(fr, gray, rgb_down)   # replaces fr.m, so phash + sharpness go on after
+            fr.m.phash = dhash(gray, self.cfg.phash_size)
+            fr.m.sharpness = sharp.laplacian_variance(gray, resolve(fr))
             self._cache.put(fr)
         groups = strategy.group(frames)
         strategy.log_grouped(groups)
@@ -138,15 +128,17 @@ class Scorer:
         return True
 
     def _measure(self, fr, gray, rgb_down):
-        """Per-frame, group-independent measurements: faces, eyes, exposure."""
+        """Per-frame, group-independent measurements: faces, eyes, exposure. Replaces the frame's
+        Measurement; sharpness (and phash, for similarity) are filled onto it afterwards."""
         faces = self.detector.faces(rgb_down)
         fr.faces = faces
-        fr.face_count = len(faces)
-        fr.primary_box = max((f.box for f in faces), key=lambda b: b[2] * b[3]) if faces else None
-        fr.eye_score = _eye_score(faces, self.cfg)
         flag, blown, crushed = sharp.exposure_flags(gray, self.cfg)
-        fr.exposure_flag = flag
-        fr.blown, fr.crushed = blown, crushed
+        fr.m = Measurement(
+            face_count=len(faces),
+            primary_box=max((f.box for f in faces), key=lambda b: b[2] * b[3]) if faces else None,
+            eye_score=eyes.open_fraction(faces, self.cfg),
+            exposure_flag=flag, blown=blown, crushed=crushed,
+        )
         self._decoded += 1
         log.debug("measured", rel=fr.rel, faces=fr.face_count,
                   eye_score=None if fr.eye_score is None else round(fr.eye_score, 3),

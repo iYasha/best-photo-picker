@@ -15,7 +15,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from .log import get_logger
-from .manifest import read_manifest_rows
+from .manifest import read_manifest
 
 log = get_logger()
 
@@ -62,47 +62,44 @@ def _thumb_data_uri(path: Path, px: int) -> str | None:
         return None
 
 
-def _card(row: dict, uri: str | None) -> str:
-    b = row["bin"]
-    name = html.escape(row["filename"])
-    reason = html.escape(row.get("reason", ""))
-    eye = row.get("eye_score", "")
-    eye_txt = eye if eye not in ("", None) else "—"
-    sharp = row.get("sharpness", "?")
-    faces = row.get("face_count", "0")
-    flag = " ⚠exp" if row.get("exposure_flag") in ("1", 1, True) else ""
+def _card(row, uri: str | None) -> str:
+    b = row.bin
+    name = html.escape(row.filename)
+    reason = html.escape(row.reason)
+    eye_txt = "—" if row.eye_score is None else f"{row.eye_score:.2f}"
+    flag = " ⚠exp" if row.exposure_flag else ""
     img = f'<img src="{uri}" loading="lazy">' if uri else '<div class="card img"></div>'
     return f"""<div class="card {b}">{img}
   <div class="meta">
     <div class="name">{name}</div>
     <span class="badge {b}">{b}</span>
     <div class="reason">{reason}{flag}</div>
-    <div class="nums"><b>sharp</b> {sharp} · <b>eyes</b> {eye_txt} · <b>faces</b> {faces}</div>
+    <div class="nums"><b>sharp</b> {row.sharpness:.0f} · <b>eyes</b> {eye_txt} · <b>faces</b> {row.face_count}</div>
   </div></div>"""
 
 
 def build(manifest_path, source_root, out_html, thumb_px: int = 320) -> Path:
-    rows = read_manifest_rows(manifest_path)
+    rows = read_manifest(manifest_path)
     source_root = Path(source_root)
     out_html = Path(out_html)
 
     bursts = defaultdict(list)
     for r in rows:
-        bursts[r["burst_id"]].append(r)
+        bursts[r.burst_id].append(r)
 
     totals = defaultdict(int)
     for r in rows:
-        totals[r["bin"]] += 1
+        totals[r.bin] += 1
 
     log.info("contact_build", photos=len(rows), bursts=len(bursts), out=str(out_html))
 
     sections = []
-    for bid in sorted(bursts, key=lambda x: int(x)):
-        items = sorted(bursts[bid], key=lambda r: (_BIN_ORDER.get(r["bin"], 9), int(r["rank_in_burst"] or 0)))
-        when = next((r["when_iso"] for r in items if r.get("when_iso")), "")
+    for bid in sorted(bursts):
+        items = sorted(bursts[bid], key=lambda r: (_BIN_ORDER.get(r.bin, 9), r.rank_in_burst))
+        when = next((r.when_iso for r in items if r.when_iso), "")
         cards = []
         for r in items:
-            uri = _thumb_data_uri(source_root / r["rel"], thumb_px)
+            uri = _thumb_data_uri(source_root / r.rel, thumb_px)
             cards.append(_card(r, uri))
         sections.append(
             f'<section class="burst"><h2>Burst {bid} · {len(items)} frames'

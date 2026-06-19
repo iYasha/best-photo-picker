@@ -11,7 +11,10 @@ changing the burst gap invalidates cached sharpness, since the locked region cha
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from pathlib import Path
+
+from .bursts import Measurement
 
 CACHE_FIELDS = [
     "rel", "mtime", "size", "gap", "when_iso", "has_subsec",
@@ -67,6 +70,22 @@ def _box_from_str(s):
         return None
 
 
+def measurement_from_row(row) -> Measurement:
+    """Rebuild a Measurement from a cache row — the read side of `measurement_cells`, in the
+    same module, so the cached schema has one (de)serializer per direction."""
+    es = row.get("eye_score", "")
+    return Measurement(
+        face_count=int(row.get("face_count") or 0),
+        primary_box=_box_from_str(row.get("primary_box", "")),
+        eye_score=float(es) if es not in ("", None) else None,
+        sharpness=float(row.get("sharpness") or 0.0),
+        exposure_flag=bool(int(row.get("exposure_flag") or 0)),
+        blown=float(row.get("blown_frac") or 0.0),
+        crushed=float(row.get("crushed_frac") or 0.0),
+        phash=int(row.get("phash") or 0),
+    )
+
+
 # ---- resumable measurement cache -----------------------------------------
 
 class MeasurementCache:
@@ -120,20 +139,12 @@ class MeasurementCache:
         return self._key(fr) in self._loaded
 
     def fill(self, fr) -> bool:
-        """Populate a frame's measured fields from cache. Returns False on a miss (frame
-        untouched). `when`/`has_subsec` are not restored — they come from the fresh scan."""
+        """Restore a frame's Measurement from cache. Returns False on a miss (frame untouched).
+        `when`/`has_subsec` are not restored — they come from the fresh scan."""
         row = self._loaded.get(self._key(fr))
         if row is None:
             return False
-        fr.face_count = int(row.get("face_count") or 0)
-        fr.primary_box = _box_from_str(row.get("primary_box", ""))
-        es = row.get("eye_score", "")
-        fr.eye_score = float(es) if es not in ("", None) else None
-        fr.sharpness = float(row.get("sharpness") or 0.0)
-        fr.exposure_flag = bool(int(row.get("exposure_flag") or 0))
-        fr.blown = float(row.get("blown_frac") or 0.0)
-        fr.crushed = float(row.get("crushed_frac") or 0.0)
-        fr.phash = int(row.get("phash") or 0)
+        fr.m = measurement_from_row(row)
         return True
 
     def put(self, fr) -> None:
@@ -152,6 +163,68 @@ class MeasurementCache:
         self._fh.close()
 
 
+# ---- the typed manifest row: the read-side contract ----------------------
+
+def _opt_float(s):
+    return float(s) if s not in ("", None) else None
+
+
+def _int(s, default=0):
+    try:
+        return int(str(s).strip())
+    except (ValueError, TypeError):
+        return default
+
+
+def _float(s, default=0.0):
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return default
+
+
+@dataclass(frozen=True)
+class ManifestRow:
+    """One manifest row, parsed and typed — the read-side interface to the Manifest.
+
+    Scoring writes CSV strings; every downstream reader used to re-coerce each cell
+    (`int(rank or 0)`, `flag in ("1", 1, True)`) on its own. `parse` does that once, here, so
+    consumers see typed fields and the row schema lives in a single module.
+    """
+    rel: str
+    filename: str
+    burst_id: int
+    when_iso: str
+    face_count: int
+    eye_score: "float | None"
+    sharpness: float
+    exposure_flag: bool
+    blown_frac: float
+    crushed_frac: float
+    bin: str
+    reason: str
+    rank_in_burst: int
+
+    @classmethod
+    def parse(cls, row: dict) -> "ManifestRow":
+        rel = row.get("rel", "")
+        return cls(
+            rel=rel,
+            filename=row.get("filename") or Path(rel).name,
+            burst_id=_int(row.get("burst_id")),
+            when_iso=row.get("when_iso", "") or "",
+            face_count=_int(row.get("face_count")),
+            eye_score=_opt_float(row.get("eye_score", "")),
+            sharpness=_float(row.get("sharpness")),
+            exposure_flag=str(row.get("exposure_flag", "")) in ("1", "True", "true"),
+            blown_frac=_float(row.get("blown_frac")),
+            crushed_frac=_float(row.get("crushed_frac")),
+            bin=row.get("bin", ""),
+            reason=row.get("reason", "") or "",
+            rank_in_burst=_int(row.get("rank_in_burst")),
+        )
+
+
 # ---- manifest read/write -------------------------------------------------
 
 def write_manifest(path, rows) -> None:
@@ -162,6 +235,7 @@ def write_manifest(path, rows) -> None:
             w.writerow({k: r.get(k, "") for k in MANIFEST_FIELDS})
 
 
-def read_manifest_rows(path):
+def read_manifest(path) -> "list[ManifestRow]":
+    """Read the manifest into typed rows — the deep read side of the contract."""
     with Path(path).open(newline="") as fh:
-        return list(csv.DictReader(fh))
+        return [ManifestRow.parse(r) for r in csv.DictReader(fh)]

@@ -7,9 +7,19 @@ of photos by hand. Non-destructive — it copies/sorts, never deletes.
 ## Language
 
 **Keeper**:
-A photo worth keeping — clears the picker's quality bar (sharp subject, eyes open, sane
-exposure). The output the user actually wants.
-_Avoid_: good photo, winner, best shot
+The AI's recommended best frame of a [[Burst]] — its top pick by quality (sharp subject,
+eyes open, sane exposure). A *recommendation*, surfaced as a mark on the photo and used to
+sort; the user can override it and is never bound by it. The thing the user actually chooses
+to keep is a [[Favourite]] — a separate axis. (Redefined for the GUI; see `docs/adr/0006`.)
+_Avoid_: good photo, winner, best shot, favourite (the human's pick, not this)
+
+**Favourite**:
+The user's own pick — a star the user stamps on the photos they actually want. The single
+decision the human makes, and orthogonal to the AI's [[Keeper]]/[[Maybe]]/[[Rejected]] mark:
+any photo can be favourited regardless of its mark, including one the AI [[Rejected]].
+Favourites are the set the user exports — copied out to a folder, originals untouched.
+Introduced with the GUI (`docs/adr/0006`); the CLI has no favourites.
+_Avoid_: keeper (the AI's pick, not this), like, selection
 
 **Burst**:
 A run of frames shot in rapid succession in continuous ("click") mode, capturing
@@ -56,6 +66,13 @@ it becomes a face-size-weighted score across all faces (big foreground faces cou
 background ones effectively don't), so the frame where the people who matter have their eyes
 open ranks highest. Only meaningful when a face is found.
 _Avoid_: blink, gaze
+
+**Measurement**:
+What scoring reads off a frame's pixels, bundled as one value: the [[Subject]] location,
+[[Sharpness]], the [[Eyes-open]] score, the [[Exposure]] fractions, and the perceptual hash.
+Held on the frame and the only thing the cache and the [[Manifest]] persist — kept distinct
+from the frame's identity (path, capture time) and from the binning verdict.
+_Avoid_: stats, metrics, score (as the bundle)
 
 **Manifest**:
 The one source of truth the tool produces — a row per photo recording its [[Burst]], whether
