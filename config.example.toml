@@ -1,0 +1,26 @@
+# Best Photo Picker — tuning. Copy to config.toml, edit, pass with `score -c config.toml`.
+# Defaults are conservative: the tool biases toward "maybe", never toward "rejected".
+
+[burst]
+gap_seconds = 2.0            # a gap larger than this between frames starts a new burst
+
+[select]
+keep_per_burst = 1           # how many top frames per burst go to keepers/
+
+[detect]
+downscale_long_edge = 1280   # face detection runs at this size (speed); sharpness uses full res
+max_faces = 6
+
+[eyes]
+eye_open_min = 0.50          # per-face open prob (1 - blink); at/above this the eyes count as open
+open_gate = 0.50             # size-weighted open fraction below this fails the portrait gate
+
+[exposure]
+blown_value = 250            # luma >= this is a blown highlight
+blown_frac = 0.10            # > 10% of pixels blown -> exposure flag
+crushed_value = 5            # luma <= this is a crushed shadow
+crushed_frac = 0.20          # > 20% of pixels crushed -> exposure flag
+
+[reject]
+sharpness_ratio = 0.30       # frame below this fraction of its burst's peak sharpness -> rejected
+single_sharpness_floor = 50.0  # a lone frame below this is uncertain -> maybe (never auto-rejected)
