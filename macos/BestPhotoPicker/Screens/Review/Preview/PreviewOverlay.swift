@@ -59,6 +59,10 @@ struct PreviewOverlay: View {
             model.previewPrev(); return .handled
         case .rightArrow:
             model.previewNext(); return .handled
+        case .upArrow:
+            model.previewPrevBurst(); return .handled
+        case .downArrow:
+            model.previewNextBurst(); return .handled
         case .escape:
             model.closePreview(); return .handled
         default:

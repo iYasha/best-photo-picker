@@ -208,6 +208,7 @@ struct PreviewInfoPanel: View {
     private var keyboardHints: some View {
         HStack(spacing: 14) {
             hint("← →", "frames")
+            hint("↑ ↓", "groups")
             hint("F", "select")
             hint("Esc", "close")
         }

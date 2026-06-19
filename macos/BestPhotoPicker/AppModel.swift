@@ -308,6 +308,39 @@ final class AppModel {
         previewZoom = false
     }
 
+    /// Move to the previous burst (group) that has displayed frames, wrapping, and
+    /// land on its first (best) displayed frame. Up arrow in the Preview. Resets
+    /// zoom. Skips bursts the active filter hides so it steps only through groups
+    /// the user can see (mirrors the grid). No-op with no result.
+    func previewPrevBurst() {
+        stepBurst(by: -1)
+    }
+
+    /// Move to the next burst (group) that has displayed frames, wrapping, landing
+    /// on its first (best) displayed frame. Down arrow in the Preview. Resets zoom.
+    func previewNextBurst() {
+        stepBurst(by: 1)
+    }
+
+    /// Walk `bursts` from the current index by `step` (±1), wrapping, until a burst
+    /// with displayed frames under the active filter is found; land on its first
+    /// frame. At most one full loop, so it terminates even if only one burst is
+    /// visible (lands back on the current one). Resets zoom on move.
+    private func stepBurst(by step: Int) {
+        guard let bursts = scoreResult?.bursts, !bursts.isEmpty else { return }
+        let n = bursts.count
+        var i = previewBurstIndex
+        for _ in 0..<n {
+            i = (i + step + n) % n
+            if !bursts[i].visibleFrames(filter: markFilter).isEmpty {
+                previewBurstIndex = i
+                previewFrameIndex = 0
+                previewZoom = false
+                return
+            }
+        }
+    }
+
     /// Jump to a specific displayed-frame index in the current burst (filmstrip
     /// tap). Clamped to range; resets zoom.
     func previewSelect(frameIndex: Int) {
