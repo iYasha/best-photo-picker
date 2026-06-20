@@ -69,6 +69,14 @@ struct FrameDisplay {
     /// Eyes-open as a percentage string, or `—` when the frame has no face.
     var eyesString: String { frame.eyes.map { "\($0)%" } ?? "—" }
     var facesString: String { "\(frame.faces)" }
+
+    /// Original source file name, e.g. `IMG_0421.CR3` (Preview metadata, issue 7).
+    var filename: String { frame.filename }
+
+    /// Human-readable original file size, e.g. `8.4 MB` (ByteCountFormatter `.file`).
+    var sizeString: String {
+        ByteCountFormatter.string(fromByteCount: frame.sizeBytes, countStyle: .file)
+    }
 }
 
 extension ScoreFrame {

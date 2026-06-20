@@ -163,13 +163,25 @@ def build_result(groups, cfg) -> dict:
     return {"grouping": method, "bursts": bursts}
 
 
-def progress_line(done: int, total: int, frame_name: str, burst_label: str) -> str:
-    """One JSON-lines progress object as a string (no trailing newline)."""
+def progress_line(done: int, total: int, frame_name: str, burst_label: str,
+                  phase: str = "scoring") -> str:
+    """One JSON-lines progress object as a string (no trailing newline).
+
+    `phase` tells the app what the pass is doing without changing the wire's
+    disambiguation (the line still carries `done`, so a reader still routes it as
+    progress, not the final doc):
+      * "loading" — the single line emitted the instant the scan finishes, before the
+        worker pool has spawned and imported the ML stack. It carries the real total
+        and `done == 0`, so the app shows "0 of N · Preparing…" instead of a frozen
+        0-of-0 that reads as a hang.
+      * "scoring" — the per-frame ticks once frames actually start finishing.
+    Older readers that don't know `phase` ignore the extra key (ADR-0008: additive)."""
     return json.dumps({
         "done": done,
         "total": total,
         "current_frame_name": frame_name,
         "current_burst_label": burst_label,
+        "phase": phase,
     })
 
 
@@ -239,8 +251,17 @@ def score_to_json(source, cfg, manifest_path, cache_path, resume, subject_mode,
 
     stream = stream or sys.stdout
     source = Path(source)
+    injected = detector is not None
     detector = detector or FaceDetector(cfg)
     frames = pipeline._scan(source, subject_mode, cfg, detector)
+
+    # The scan is done, but the process pool still has to spawn its workers and have
+    # each import the ML stack + load its detection models before the first frame
+    # finishes — tens of seconds on a big set (worse over a network mount). Emit one
+    # "loading" line now, carrying the real total, so the app shows "0 of N · Preparing…"
+    # and its elapsed clock ticks, instead of a frozen 0-of-0 bar that reads as a hang.
+    stream.write(progress_line(0, len(frames), "", "", phase="loading") + "\n")
+    stream.flush()
 
     def _on_progress(done, total, frame_name, burst_label):
         # One progress line per frame, streamed AS the Scorer decodes/measures it, so the
@@ -249,7 +270,8 @@ def score_to_json(source, cfg, manifest_path, cache_path, resume, subject_mode,
         stream.write(progress_line(done, total, frame_name, burst_label) + "\n")
         stream.flush()
 
-    groups = pipeline.Scorer(cfg, detector, cache_path, resume, subject_mode).run(
+    groups = pipeline.Scorer(cfg, detector, cache_path, resume, subject_mode,
+                             parallel=not injected).run(
         frames, grouping_for(cfg), on_progress=_on_progress)
     pipeline._emit(groups, cfg, manifest_path)   # the human CSV — same writer as plain score
 

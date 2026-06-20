@@ -36,7 +36,7 @@ struct PreviewFilmstrip: View {
         let isFavourite = model.isFavourite(frame.id)
         let radius = Metrics.Radius.badge // 6
 
-        return ThumbnailImage(frame: frame)
+        return ThumbnailImage(frame: frame, contentMode: .fit)
             .frame(width: cellWidth, height: cellWidth * 2 / 3)
             .clipShape(RoundedRectangle(cornerRadius: radius))
             .overlay(alignment: .topTrailing) {

@@ -26,8 +26,8 @@ struct ThumbnailTile: View {
 
     var body: some View {
         // Base tile = the photo, made clickable to open the preview.
-        ThumbnailImage(frame: display.frame)
-            .frame(width: width, height: width * 2 / 3) // aspect 3/2
+        ThumbnailImage(frame: display.frame, contentMode: .fit)
+            .frame(width: width, height: width * 2 / 3) // uniform 3/2 box; photo fits inside
             .clipShape(RoundedRectangle(cornerRadius: radius))
             .overlay(alignment: .topLeading) { bestBadge }
             .overlay(alignment: .bottom) { bottomOverlay }

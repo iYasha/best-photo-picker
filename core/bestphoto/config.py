@@ -26,6 +26,7 @@ class Config(BaseSettings):
     sim_time_ceiling: float = 30.0  # similarity: always split across gaps larger than this (seconds)
     phash_size: int = 8             # similarity: dHash grid (8 -> 64-bit hash)
     keep_per_burst: int = 1
+    workers: int = 0             # score parallelism: 0 = auto (min(cpu, 14) capped by RAM, ~1.3GB/worker); 1 = serial
     downscale_long_edge: int = 1280
     max_faces: int = 6
     min_face_frac: float = 0.005   # absolute floor: ignore faces below this fraction of the frame
@@ -50,6 +51,7 @@ class Config(BaseSettings):
         group = data.get("group", {})
         burst = data.get("burst", {})
         select = data.get("select", {})
+        run = data.get("run", {})
         detect = data.get("detect", {})
         eyes = data.get("eyes", {})
         exp = data.get("exposure", {})
@@ -63,6 +65,7 @@ class Config(BaseSettings):
             "sim_time_ceiling": group.get("sim_time_ceiling"),
             "phash_size": group.get("phash_size"),
             "keep_per_burst": select.get("keep_per_burst"),
+            "workers": run.get("workers"),
             "downscale_long_edge": detect.get("downscale_long_edge"),
             "max_faces": detect.get("max_faces"),
             "min_face_frac": detect.get("min_face_frac"),

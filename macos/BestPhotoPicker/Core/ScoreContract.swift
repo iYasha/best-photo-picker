@@ -25,6 +25,20 @@ import Foundation
 
 // MARK: Progress event
 
+/// What the pass is doing when a progress line is emitted.
+///
+/// `loading` tags the single line the core emits the instant its scan finishes —
+/// before the worker pool has spawned and imported its ML stack — so this line
+/// carries the real `total` with `done == 0`. The app uses it to show the count and
+/// a "Preparing…" state through the model-warmup window instead of a frozen 0-of-0
+/// bar (which read as a hang). `scoring` is every subsequent per-frame tick.
+/// Optional on the wire: an older core that doesn't send `phase` decodes to `nil`,
+/// which the app treats as `scoring` (ADR-0008: the field is additive).
+enum ScorePhase: String, Decodable, Sendable {
+    case loading
+    case scoring
+}
+
 /// One streamed progress event (one JSON line) emitted during scoring.
 ///
 /// Elapsed / remaining time are **derived client-side** by `CoreBridge` from the
@@ -41,11 +55,20 @@ struct ScoreProgress: Decodable, Sendable, Equatable {
     /// Human-readable label of the burst the current frame belongs to,
     /// e.g. `Heron — takeoff`. Shown as "analysing · {label}".
     let currentBurstLabel: String
+    /// What the pass is doing (`loading` model-warmup vs per-frame `scoring`).
+    /// `nil` from an older core that predates the field — treated as `scoring`.
+    let phase: ScorePhase?
 
     /// Completion fraction in 0…1, clamped. Convenience for the progress bar.
     var fraction: Double {
         guard total > 0 else { return 0 }
         return min(1, max(0, Double(done) / Double(total)))
+    }
+
+    /// True while the core is still warming up models and no frame has finished —
+    /// the window the "Preparing…" UI covers.
+    var isLoading: Bool {
+        phase == .loading
     }
 }
 

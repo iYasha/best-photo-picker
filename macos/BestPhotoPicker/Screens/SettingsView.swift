@@ -13,6 +13,9 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var showAdvanced = false
+    /// Drives the confirmation dialog for "Reset to recommended" (a tuning wipe,
+    /// so it asks first).
+    @State private var showResetConfirm = false
     /// Debounce token: each slider change cancels the previous pending save and
     /// schedules a new one, so a drag writes the file once it settles rather than
     /// on every intermediate value.
@@ -26,10 +29,12 @@ struct SettingsView: View {
                 backButton
                 title
                 groupingCard($settings)
+                performanceCard($settings)
                 advancedToggle
                 if showAdvanced {
                     advancedWell($settings)
                 }
+                resetRow
                 savedNote
             }
             .frame(maxWidth: settingsMaxWidth, alignment: .leading)
@@ -39,6 +44,15 @@ struct SettingsView: View {
             .screenEntrance()
         }
         .onChange(of: settingsSnapshot) { _, _ in scheduleSave() }
+        .confirmationDialog(
+            "Reset all settings to recommended defaults?",
+            isPresented: $showResetConfirm, titleVisibility: .visible
+        ) {
+            Button("Reset to recommended", role: .destructive) { resetTapped() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Grouping, performance, and the advanced ML thresholds all return to their defaults. This can't be undone.")
+        }
     }
 
     private let settingsMaxWidth: CGFloat = 640
@@ -115,6 +129,50 @@ struct SettingsView: View {
                     step: 1,
                     readout: model.settings.simThresholdDisplay
                 )
+            }
+            .padding(18)
+            .background(cardBackground)
+        }
+        .padding(.bottom, 18)
+    }
+
+    // MARK: Performance card
+
+    private func performanceCard(_ settings: Bindable<SettingsStore>) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("PERFORMANCE")
+                .padding(.bottom, 12)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 7) {
+                            Image(systemName: "cpu")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Palette.textSecondary)
+                            Text("Scoring workers")
+                                .font(Typography.ui(13.5, weight: .semibold))
+                                .foregroundStyle(Palette.textPrimary)
+                        }
+                        Text("How many photos are scored at once. Each worker uses ≈1.3 GB of RAM — Auto sizes the count to your Mac.")
+                            .font(Typography.ui(12))
+                            .foregroundStyle(Color(hex: "#8a8a92"))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    Text(model.settings.workersDisplay)
+                        .font(Typography.mono(14, weight: .semibold))
+                        .foregroundStyle(Palette.accent)
+                }
+                Picker("Scoring workers", selection: settings.workers) {
+                    Text("Auto (recommended)").tag(0)
+                    ForEach(1...max(1, SettingsStore.maxSelectableWorkers), id: \.self) { n in
+                        Text("\(n)").tag(n)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .tint(Palette.accent)
             }
             .padding(18)
             .background(cardBackground)
@@ -219,6 +277,32 @@ struct SettingsView: View {
         Rectangle()
             .fill(Color(hex: "#18181b"))
             .frame(height: 1)
+    }
+
+    // MARK: Reset
+
+    private var resetRow: some View {
+        Button { showResetConfirm = true } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Reset to recommended defaults")
+                    .font(Typography.ui(12.5, weight: .semibold))
+            }
+            .foregroundStyle(Palette.textSecondary)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: Metrics.Radius.button)
+                    .fill(Palette.panelRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Metrics.Radius.button)
+                    .strokeBorder(Palette.borderSubtleAlt2, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 16)
     }
 
     // MARK: Footer note
@@ -339,11 +423,19 @@ struct SettingsView: View {
     private var settingsSnapshot: SettingsSnapshot {
         let s = model.settings
         return SettingsSnapshot(
-            timeGap: s.timeGap, simThreshold: s.simThreshold,
+            timeGap: s.timeGap, simThreshold: s.simThreshold, workers: s.workers,
             faceConf: s.faceConf, eyeThresh: s.eyeThresh,
             blownLimit: s.blownLimit, crushLimit: s.crushLimit,
             rejectRatio: s.rejectRatio
         )
+    }
+
+    /// Confirmed reset: drop any pending debounced write and restore defaults
+    /// (which persists immediately). The `onChange` that follows the state change
+    /// re-schedules a save of the same values — harmless and idempotent.
+    private func resetTapped() {
+        saveTask?.cancel()
+        model.settings.resetToDefaults()
     }
 
     /// Debounce: coalesce a drag's many value changes into a single write ~0.4 s
@@ -363,6 +455,7 @@ struct SettingsView: View {
 private struct SettingsSnapshot: Equatable {
     let timeGap: Double
     let simThreshold: Double
+    let workers: Int
     let faceConf: Double
     let eyeThresh: Double
     let blownLimit: Double

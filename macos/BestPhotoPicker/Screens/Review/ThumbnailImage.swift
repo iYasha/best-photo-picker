@@ -27,6 +27,14 @@ import SwiftUI
 struct ThumbnailImage: View {
     let frame: ScoreFrame
 
+    /// How the photo sits in the caller's box.
+    ///   • `.fill` — crop to fill the box (small list/icon thumbs).
+    ///   • `.fit`  — show the WHOLE photo at true proportions, letterboxed on a
+    ///     dark matte (a portrait frame pillarboxes instead of being cropped to
+    ///     landscape). The grid, filmstrip, and large preview use this so vertical
+    ///     and horizontal photos both read at their real shape.
+    var contentMode: ContentMode = .fill
+
     /// The source root chosen on Import. `frame.relPath` is resolved against it.
     @Environment(AppModel.self) private var model
 
@@ -37,12 +45,19 @@ struct ThumbnailImage: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                // Letterbox matte: the dark surround a `.fit` photo sits on (the
+                // pillarbox/letterbox bars). No-op under `.fill` — the photo covers
+                // it. The caller's `.clipShape` rounds it with the photo.
+                if contentMode == .fit {
+                    Palette.panelDeepAlt
+                }
                 if let decoded {
-                    // Real photo: fill the caller's frame, cropping overflow. The
-                    // caller's `.clipShape` rounds the corners.
+                    // Real photo: `.fill` crops overflow to the box, `.fit` shows
+                    // the whole frame centred. The caller's `.clipShape` rounds the
+                    // corners.
                     Image(decoded: decoded)
                         .resizable()
-                        .scaledToFill()
+                        .aspectRatio(contentMode: contentMode)
                         .frame(width: geo.size.width, height: geo.size.height)
                         .clipped()
                 } else {
@@ -96,7 +111,13 @@ struct ThumbnailImage: View {
     private func pixelBucket(for size: CGSize) -> Int {
         let scale = 2.0 // Retina; over-decoding slightly is cheap and keeps it crisp.
         let longestPoints = max(size.width, size.height)
-        let target = max(64, longestPoints * scale)
+        // Ceiling on the decoded longest edge. The full-screen Preview stage is the
+        // big consumer here; on a 5K display `longestPoints * 2` is ~5000px (~70 MB
+        // a frame). A preview never needs more than this — zoom just magnifies the
+        // already-decoded bitmap — so capping keeps each cached frame bounded
+        // (`maxPixels` keeps memory sane alongside ImageCache's byte budget).
+        let maxPixels = 2560.0
+        let target = min(maxPixels, max(64, longestPoints * scale))
         // Round up to the next 128px step.
         let step = 128.0
         return Int((target / step).rounded(.up) * step)

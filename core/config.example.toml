@@ -13,6 +13,9 @@ gap_seconds = 2.0            # (time) a gap larger than this between frames star
 [select]
 keep_per_burst = 1           # how many top frames per burst go to keepers/
 
+[run]
+workers = 0                  # score parallelism: 0 = auto (min(cpu, 14) capped by RAM, ~1.3GB/worker); 1 = serial (ADR 0009)
+
 [detect]
 downscale_long_edge = 1280   # face detection runs at this size (speed); sharpness uses full res
 max_faces = 6

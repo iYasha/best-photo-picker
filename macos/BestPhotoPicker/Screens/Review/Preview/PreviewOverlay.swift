@@ -8,9 +8,10 @@ import SwiftUI
 //   • middle   — large photo STAGE (flex:1, radius 12, inner vignette) with ‹ › nav
 //                arrows, a "★ AI BEST" badge on the Keeper, a "100% · checking
 //                sharpness" tag when zoomed; a 264px right INFO PANEL (mark, WHY,
-//                SCORES sharpness bar + Eyes/Faces chips + exposure row, Select for
-//                export + zoom toggle, keyboard hints); a bottom FILMSTRIP.
-//   • keyboard — ←/→ frames, F select, Z zoom, Esc close (only while open).
+//                FILE name/size/time, SCORES sharpness bar + Eyes/Faces chips +
+//                exposure row, full-width Select for export, keyboard hints); a
+//                bottom FILMSTRIP.
+//   • keyboard — ←/→ frames, ↑/↓ groups, Space select, Z zoom, Esc close (only while open).
 //
 // Frame resolution is via `AppModel.previewFrame` / `previewVisibleFrames`, which
 // index the burst's DISPLAYED frames (`visibleFrames(filter:)`), so the preview
@@ -34,7 +35,11 @@ struct PreviewOverlay: View {
             if let frame, let burst = model.previewBurst {
                 VStack(spacing: 12) {
                     topBar(burst: burst, count: frames.count)
-                    middleRow(frame: frame, frames: frames)
+                    if model.previewAtBurstEnd {
+                        endOfBurstRow(burst: burst, frames: frames)
+                    } else {
+                        middleRow(frame: frame, frames: frames)
+                    }
                 }
                 .padding(EdgeInsets(top: 14, leading: 16, bottom: 16, trailing: 16))
             }
@@ -51,8 +56,9 @@ struct PreviewOverlay: View {
 
     // MARK: Keyboard (macOS 14+)
     //
-    // ←/→ move frames, F toggle Favourite, Z toggle 100% zoom, Esc close. Active
-    // only while the overlay is on screen (it is only inserted when open).
+    // ←/→ move frames, ↑/↓ move bursts, Space toggle Favourite, Z toggle 100%
+    // zoom, Esc close. Active only while the overlay is on screen (it is only
+    // inserted when open).
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
         switch press.key {
         case .leftArrow:
@@ -63,14 +69,14 @@ struct PreviewOverlay: View {
             model.previewPrevBurst(); return .handled
         case .downArrow:
             model.previewNextBurst(); return .handled
+        case .space:
+            model.previewToggleFavourite(); return .handled
         case .escape:
             model.closePreview(); return .handled
         default:
             break
         }
         switch press.characters.lowercased() {
-        case "f":
-            model.previewToggleFavourite(); return .handled
         case "z":
             model.previewToggleZoom(); return .handled
         default:
@@ -120,10 +126,36 @@ struct PreviewOverlay: View {
             PreviewInfoPanel(
                 display: display,
                 isFavourite: model.previewIsFavourite,
-                zoomed: model.previewZoom,
-                onToggleFavourite: { model.previewToggleFavourite() },
-                onToggleZoom: { model.previewToggleZoom() }
+                captureTime: model.previewBurst?.time ?? "—",
+                onToggleFavourite: { model.previewToggleFavourite() }
             )
+        }
+    }
+
+    // MARK: End-of-burst stop screen
+    //
+    // Replaces the stage + info panel when `previewAtBurstEnd` (→ off the last
+    // frame). Keeps the filmstrip below so the user can jump straight back to any
+    // frame instead of stepping. ‹ returns to the last frame, › / "Back to first
+    // photo" wraps, "Next burst" steps to the next group.
+    private func endOfBurstRow(burst: ScoreBurst, frames: [ScoreFrame]) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(spacing: 12) {
+                EndOfBurstStage(
+                    burstLabel: burst.label,
+                    count: frames.count,
+                    onPrev: { model.previewPrev() },
+                    onNext: { model.previewNext() },
+                    onNextBurst: { model.previewNextBurst() }
+                )
+                PreviewFilmstrip(
+                    frames: frames,
+                    activeIndex: model.previewFrameIndex,
+                    keeperId: model.previewBurst?.keeperId,
+                    onSelect: { model.previewSelect(frameIndex: $0) }
+                )
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 }

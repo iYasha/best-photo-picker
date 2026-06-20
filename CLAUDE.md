@@ -40,7 +40,7 @@ A non-destructive burst/near-duplicate photo culler. **It never moves or deletes
 - `score` (`pipeline.py`) → `manifest.csv` (one row per photo: group id, faces, eye_score, sharpness, exposure, bin, reason). Moves nothing.
 - `review` (`review.py`) / `contact` (`contact.py`) → consume the manifest. You can hand-edit the manifest before either.
 
-**`score` flow:** scan → group → per-group detect/measure → gate+rank bin → manifest. Two interchangeable grouping strategies (`cfg.group_method`, `--group`):
+**`score` flow:** scan → group → per-group detect/measure → gate+rank bin → manifest. The per-frame measure (decode+detect+exposure+sharpness) fans out over a **process pool by default** (`cfg.workers`, env `BPP_WORKERS`; 0=auto `min(cpu,8)`, 1=serial). Processes, not threads, because the detection model singletons segfault when shared across threads (`docs/adr/0009`). Parallel and serial paths score **identically** (golden-pinned); the pool is bypassed for injected detectors (tests), `workers==1`, or tiny sets. Two interchangeable grouping strategies (`cfg.group_method`, `--group`):
 - **time** (`group_into_bursts`): split on capture-time gap. Single decode per photo; sharpness measured on a **per-burst locked region** (`consensus_box`) so a blurry frame can't dodge the detector. Unchanged legacy path.
 - **similarity** (`group_by_similarity` + `phash.py`): cluster near-duplicate frames by perceptual-hash distance, camera-agnostic. Sharpness measured on each frame's own subject box. See `docs/adr/0004`.
 

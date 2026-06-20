@@ -99,12 +99,12 @@ struct ScoringView: View {
         HStack(spacing: 14) {
             ScanThumbnail()
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.scoringCurrentFrame.isEmpty ? "—" : model.scoringCurrentFrame)
+                Text(model.scoringActivityTitle)
                     .font(Typography.mono(12.5))
                     .foregroundStyle(Palette.textPrimaryAlt)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text("analysing · \(model.scoringCurrentBurstLabel)")
+                Text(model.scoringActivitySubtitle)
                     .font(Typography.ui(12))
                     .foregroundStyle(Palette.textTertiary)
                     .lineLimit(1)

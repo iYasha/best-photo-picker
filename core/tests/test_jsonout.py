@@ -129,9 +129,16 @@ def test_undated_burst_time_is_placeholder():
 
 def test_progress_line_keys():
     line = json.loads(jsonout.progress_line(3, 10, "IMG_1.jpg", "Heron"))
-    assert set(line) == {"done", "total", "current_frame_name", "current_burst_label"}
+    assert set(line) == {"done", "total", "current_frame_name", "current_burst_label", "phase"}
     assert line == {"done": 3, "total": 10, "current_frame_name": "IMG_1.jpg",
-                    "current_burst_label": "Heron"}
+                    "current_burst_label": "Heron", "phase": "scoring"}
+
+
+def test_progress_line_phase_defaults_to_scoring_and_can_be_loading():
+    # Per-frame ticks default to "scoring"; the startup line is tagged "loading" so the
+    # app distinguishes the model-warmup window from real frame progress.
+    assert json.loads(jsonout.progress_line(0, 5, "", ""))["phase"] == "scoring"
+    assert json.loads(jsonout.progress_line(0, 5, "", "", phase="loading"))["phase"] == "loading"
 
 
 def test_progress_and_result_are_distinguishable_on_the_wire():
@@ -174,8 +181,13 @@ def test_score_to_json_streams_one_progress_line_per_frame(tmp_path):
     )
     lines = [json.loads(ln) for ln in buf.getvalue().splitlines() if ln.strip()]
     progress = [ln for ln in lines if jsonout.PROGRESS_KEY in ln]
-    assert len(progress) == 3                          # one per frame, via the live callback
-    assert progress[-1]["done"] == progress[-1]["total"] == 3
+    # A single leading "loading" line carries the real total before any frame is done
+    # (so the app shows "0 of N · Preparing…" through the model-warmup window, not 0-of-0).
+    assert progress[0] == {"done": 0, "total": 3, "current_frame_name": "",
+                           "current_burst_label": "", "phase": "loading"}
+    scoring = [ln for ln in progress if ln["phase"] == "scoring"]
+    assert len(scoring) == 3                            # one per frame, via the live callback
+    assert scoring[-1]["done"] == scoring[-1]["total"] == 3
     assert jsonout.RESULT_KEY in lines[-1]             # final doc still emitted last
 
 
@@ -200,3 +212,40 @@ def test_score_to_json_writes_manifest_and_emits_contract(tmp_path):
     assert result["grouping"] == "time"
     fr = result["bursts"][0]["frames"][0]
     assert fr["filename"] == "p.jpg" and fr["faces"] == 1 and fr["eyes"] == 100
+
+
+# ---- parallel worker progress contract (ADR 0009) ------------------------
+
+def test_measure_unit_streams_one_progress_message_per_fresh_frame(tmp_path, monkeypatch):
+    # Regression: a parallel worker must stream one progress message per FRESH frame (so the
+    # bar advances per frame), never one lump per finished unit — that lump-per-unit reporting
+    # made the bar stall then jump to 100%. Frames carried only for their box (cached) must NOT
+    # tick — the parent already ticked them. Driven in-process via the worker globals + a fake
+    # detector, no pool / no mediapipe, so it stays in the fast suite.
+    import queue as _queue
+
+    from bestphoto import pipeline
+
+    def _spec(name, cached):
+        p = tmp_path / name
+        _make_jpeg(p)
+        fr = Frame(path=p, rel=name, when=None, mtime=0.0, size=0)
+        s = pipeline._frame_spec(fr, cached=False)
+        if cached:
+            s["cached"] = Measurement(face_count=0)
+        return s
+
+    q = _queue.Queue()
+    monkeypatch.setattr(pipeline, "_W_CFG", Config(group_method="time"))
+    monkeypatch.setattr(pipeline, "_W_DETECTOR", FakeDetector([]))
+    monkeypatch.setattr(pipeline, "_W_QUEUE", q)
+
+    specs = [_spec("a.jpg", cached=False), _spec("b.jpg", cached=False),
+             _spec("c.jpg", cached=True)]      # c carried for its box only
+    out = pipeline._measure_unit(specs, "auto")
+
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    assert msgs == ["a.jpg", "b.jpg"]          # one tick per fresh frame, in order, none for c
+    assert set(out) == {"a.jpg", "b.jpg"}      # measurements returned only for fresh frames

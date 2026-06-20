@@ -6,24 +6,28 @@ import SwiftUI
 // padding 16. Top→bottom:
 //   • mark dot + label (mark colour) + "AI mark"
 //   • WHY card — uppercase label + plain-English reason
+//   • FILE card — file name + size + shot time
 //   • SCORES — Sharpness row + a colour-coded bar (green ≥70 / amber ≥48 / red <48)
 //   • Eyes-open + Faces stat chips
 //   • exposure warning row (only when flagged)
 //   • spacer
-//   • Select for export (gold when Favourite) + zoom ⤢ toggle
-//   • keyboard hint row (← → frames · F select · Esc close)
+//   • Select for export (gold when Favourite), full width
+//   • keyboard hint row (← → frames · ↑ ↓ groups · Space select · Esc close)
 struct PreviewInfoPanel: View {
     let display: FrameDisplay
     let isFavourite: Bool
-    let zoomed: Bool
+    /// Capture timecode of the frame's burst, e.g. `07:42:11` (the core carries
+    /// time per burst, not per frame — see `ScoreBurst.time`).
+    let captureTime: String
     let onToggleFavourite: () -> Void
-    let onToggleZoom: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             markRow
                 .padding(.bottom, 14)
             whyCard
+                .padding(.bottom, 16)
+            fileCard
                 .padding(.bottom, 16)
             sectionLabel("Scores")
                 .padding(.bottom, 10)
@@ -92,6 +96,45 @@ struct PreviewInfoPanel: View {
             RoundedRectangle(cornerRadius: Metrics.Radius.cardSmall - 1)
                 .strokeBorder(Palette.borderSubtle, lineWidth: 1)
         )
+    }
+
+    // MARK: FILE card — name · size · shot time
+
+    private var fileCard: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            sectionLabel("File")
+            metaRow("Name", display.filename, truncateMiddle: true)
+            metaRow("Size", display.sizeString)
+            metaRow("Shot", captureTime)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: Metrics.Radius.cardSmall - 1)
+                .fill(Palette.panelDeepAlt)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Metrics.Radius.cardSmall - 1)
+                .strokeBorder(Palette.borderSubtle, lineWidth: 1)
+        )
+    }
+
+    /// A label → mono-value row (right-aligned value), reused for Name/Size/Shot.
+    /// `truncateMiddle` keeps both ends of a long file name visible (`DSC_…13.JPG`).
+    private func metaRow(_ label: String, _ value: String, truncateMiddle: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(Typography.ui(12))
+                .foregroundStyle(Palette.textSecondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(Typography.mono(12, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Palette.textPrimary)
+                .lineLimit(1)
+                .truncationMode(truncateMiddle ? .middle : .tail)
+        }
     }
 
     // MARK: SCORES — Sharpness + colour bar
@@ -194,22 +237,22 @@ struct PreviewInfoPanel: View {
         )
     }
 
-    // MARK: Select for export + zoom toggle
+    // MARK: Select for export (full width)
 
     private var actionRow: some View {
-        HStack(spacing: 8) {
-            SelectForExportButton(isFavourite: isFavourite, action: onToggleFavourite)
-            ZoomToggleButton(active: zoomed, action: onToggleZoom)
-        }
+        SelectForExportButton(isFavourite: isFavourite, action: onToggleFavourite)
     }
 
     // MARK: Keyboard hints
-
+    //
+    // FlowLayout (not a fixed HStack) so hints wrap as whole units to a second
+    // row in the narrow 264px panel; each hint is `.fixedSize()` so its label
+    // never breaks mid-word ("fram es").
     private var keyboardHints: some View {
-        HStack(spacing: 14) {
+        FlowLayout(spacing: 10) {
             hint("← →", "frames")
             hint("↑ ↓", "groups")
-            hint("F", "select")
+            hint("Space", "select")
             hint("Esc", "close")
         }
     }
@@ -223,6 +266,7 @@ struct PreviewInfoPanel: View {
                 .font(Typography.ui(10.5))
                 .foregroundStyle(Palette.textTertiary)
         }
+        .fixedSize()
     }
 
     // MARK: Shared section label (uppercase, tracked)
@@ -263,7 +307,7 @@ private struct SelectForExportButton: View {
             .brightness(hovering && isFavourite ? 0.06 : 0)
         }
         .buttonStyle(.plain)
-        .help(isFavourite ? "Remove from export selection (F)" : "Select for export (F)")
+        .help(isFavourite ? "Remove from export selection (Space)" : "Select for export (Space)")
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
@@ -276,39 +320,5 @@ private struct SelectForExportButton: View {
             RoundedRectangle(cornerRadius: Metrics.Radius.button)
                 .fill(hovering ? Palette.hoverRaisedStrong : Palette.hoverRaised)
         }
-    }
-}
-
-// MARK: - Zoom toggle (⤢)
-//
-// .dc.html `pvZoomBtn` (~717): 44px, gold-tinted bg + gold border + gold glyph when
-// active; otherwise neutral #1c1c20 / #2c2c33.
-private struct ZoomToggleButton: View {
-    let active: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: Icon.zoom)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(active ? Palette.accent : Palette.textSecondary)
-                .frame(width: 44)
-                .frame(maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: Metrics.Radius.button)
-                        .fill(active ? Palette.accent.opacity(0.16)
-                                     : (hovering ? Palette.hoverRaisedStrong : Palette.hoverRaised))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Metrics.Radius.button)
-                        .strokeBorder(active ? Palette.accent : Palette.borderStrong, lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-        .help("Zoom to 100% (Z)")
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
-        .fixedSize(horizontal: true, vertical: false)
     }
 }

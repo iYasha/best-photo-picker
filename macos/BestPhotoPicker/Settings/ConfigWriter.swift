@@ -20,6 +20,7 @@ import Foundation
 //
 //   [group]  method, sim_max_distance
 //   [burst]  gap_seconds
+//   [run]    workers          (only when pinned; Auto omits it so the core decides)
 //   [detect] yunet_score
 //   [eyes]   eye_open_min, open_gate
 //   [exposure] blown_value, crushed_frac
@@ -35,6 +36,9 @@ struct ConfigWriter {
     struct Values {
         var timeGap: Double?
         var simThreshold: Double?
+        /// Explicit worker count from `[run] workers`. Absent (Auto) ⇒ `nil`, so
+        /// the store keeps its `0` (Auto) default.
+        var workers: Int?
         var faceConf: Double?
         var eyeThresh: Double?
         var blownLimit: Double?
@@ -119,6 +123,13 @@ struct ConfigWriter {
         lines.append("[burst]")
         lines.append("gap_seconds = \(num(s.timeGap))")
         lines.append("")
+        // Only pin workers when the user chose an explicit count. Auto (0) writes no
+        // key, so the core applies its own RAM-aware default (ADR 0009).
+        if s.workers > 0 {
+            lines.append("[run]")
+            lines.append("workers = \(int(s.workers))")
+            lines.append("")
+        }
         lines.append("[detect]")
         lines.append("yunet_score = \(num(s.faceConf))")
         lines.append("")
@@ -172,6 +183,7 @@ struct ConfigWriter {
         if let d = raw["group.sim_max_distance"] {
             v.simThreshold = Self.likeness(fromSimDistance: Int(d.rounded()))
         }
+        if let w = raw["run.workers"] { v.workers = Int(w.rounded()) }
         if let f = raw["detect.yunet_score"] { v.faceConf = f }
         if let e = raw["eyes.eye_open_min"] { v.eyeThresh = e }
         if let b = raw["exposure.blown_value"] {

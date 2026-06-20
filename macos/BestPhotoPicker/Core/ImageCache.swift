@@ -13,10 +13,13 @@ import Foundation
 //      at once (e.g. a fast scroll), only one decode `Task` runs; the rest await
 //      its result. Without this, a flick-scroll would kick off redundant decodes.
 //
-// Eviction is a simple bounded FIFO on entry count — thumbnails are small and the
-// working set (one screenful + a little) is modest, so a count cap is enough; no
-// byte accounting or disk tier is needed for this slice (issue spec: in-memory is
-// sufficient, disk optional).
+// Eviction is a bounded FIFO governed by a **byte budget** (not entry count). The
+// grid tiles are small, but the full-screen Preview stage asks for near-screen-
+// resolution images — on a Retina display one such frame can be 15–70 MB. A pure
+// count cap would let "review every photo in every burst" pin hundreds of those
+// and balloon to tens of GB of RAM; bounding by resident bytes keeps it flat
+// regardless of how big any single decoded frame is. A high entry-count cap stays
+// as a secondary backstop. No byte-accurate disk tier is needed for this slice.
 //
 // The decode itself runs on a background executor (`Task.detached`), off the main
 // actor, and the decoded `CGImage` (immutable, `Sendable`-safe to hand across) is
@@ -34,12 +37,20 @@ actor ImageCache {
         let maxPixelSize: Int
     }
 
-    /// Cap on resident decoded thumbnails. ~600 small images is comfortably under a
-    /// few hundred MB and covers many screenfuls of scrollback.
-    private let capacity = 600
+    /// Soft cap on **total resident decoded bytes**. The real bound — preview-stage
+    /// images are large, so this is what keeps memory flat. 512 MB holds many
+    /// screenfuls of thumbnails plus a healthy run of full-size previews.
+    private let byteBudget = 512 * 1024 * 1024
+    /// Secondary backstop on entry count, so the bookkeeping dictionaries can't grow
+    /// without limit in a pathological all-tiny-images case.
+    private let capacity = 1200
 
     /// Decoded results, newest-touched last (for FIFO-ish eviction).
     private var cached: [Key: CGImage] = [:]
+    /// Bytes each cached image occupies (`bytesPerRow * height`), for the budget.
+    private var sizes: [Key: Int] = [:]
+    /// Running sum of `sizes.values`, kept in step with `cached`.
+    private var residentBytes = 0
     /// Insertion/access order of keys for eviction (front = oldest).
     private var order: [Key] = []
     /// Decodes currently running, so duplicate requests await the same `Task`.
@@ -74,12 +85,25 @@ actor ImageCache {
     // MARK: Eviction bookkeeping
 
     private func store(_ key: Key, _ image: CGImage) {
+        // Replacing an existing key: drop its old byte count first.
+        if let old = sizes[key] { residentBytes -= old }
+        let bytes = image.bytesPerRow * image.height
         cached[key] = image
+        sizes[key] = bytes
+        residentBytes += bytes
         touch(key)
-        while order.count > capacity {
-            let oldest = order.removeFirst()
-            cached[oldest] = nil
+        // Evict oldest until BOTH the byte budget and the count backstop hold —
+        // but always keep the entry we just stored (`order.count > 1`), so a single
+        // image larger than the whole budget can't spin forever.
+        while (residentBytes > byteBudget || order.count > capacity), order.count > 1 {
+            evictOldest()
         }
+    }
+
+    private func evictOldest() {
+        let oldest = order.removeFirst()
+        if let bytes = sizes.removeValue(forKey: oldest) { residentBytes -= bytes }
+        cached[oldest] = nil
     }
 
     private func touch(_ key: Key) {

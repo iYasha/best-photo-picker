@@ -66,6 +66,11 @@ final class AppModel {
     var scoringCurrentFrame: String = ""
     /// Label of the burst the current frame belongs to.
     var scoringCurrentBurstLabel: String = ""
+    /// What the pass is doing right now (`loading` model-warmup vs per-frame
+    /// `scoring`). `nil` before the first event; `.loading` through the silent
+    /// model-warmup window so the now-processing card shows "Preparing…" with the
+    /// real total instead of a frozen 0-of-0 (the "looks stuck" fix).
+    var scoringPhase: ScorePhase?
     /// Elapsed wall-clock since scoring started, derived client-side.
     var scoringElapsed: TimeInterval = 0
     /// Estimated remaining time, derived from elapsed × (total/done − 1).
@@ -193,6 +198,11 @@ final class AppModel {
     /// Whether the Preview stage is zoomed to 100% (issue 7). Reset whenever the
     /// preview opens, closes, or moves to another frame.
     var previewZoom: Bool = false
+    /// One-stop "end of burst" interstitial. Stepping forward (→) off the LAST
+    /// displayed frame lands here instead of wrapping straight to the first; a
+    /// second → then wraps. So the wrap-around is deliberate, never accidental.
+    /// Cleared by any other navigation (←, ↑/↓ burst, filmstrip tap, open, close).
+    var previewAtBurstEnd: Bool = false
 
     /// Toggle a frame's Favourite (the user's pick / export set). The sole user
     /// action on the grid. Keeps `selectedCount` in sync.
@@ -251,6 +261,7 @@ final class AppModel {
         previewBurstIndex = burstIndex
         previewFrameIndex = frameIndex
         previewZoom = false
+        previewAtBurstEnd = false
         isPreviewOpen = true
     }
 
@@ -288,6 +299,7 @@ final class AppModel {
     func closePreview() {
         isPreviewOpen = false
         previewZoom = false
+        previewAtBurstEnd = false
     }
 
     /// Move to the previous displayed frame in the current burst, wrapping. Resets
@@ -295,17 +307,35 @@ final class AppModel {
     func previewPrev() {
         let count = previewVisibleFrames.count
         guard count > 0 else { return }
-        previewFrameIndex = (previewFrameIndex - 1 + count) % count
         previewZoom = false
+        // ← from the end-of-burst screen steps back onto the last frame.
+        if previewAtBurstEnd {
+            previewAtBurstEnd = false
+            return
+        }
+        previewFrameIndex = (previewFrameIndex - 1 + count) % count
     }
 
-    /// Move to the next displayed frame in the current burst, wrapping. Resets zoom
-    /// on move. No-op when the burst has no displayed frames.
+    /// Move to the next displayed frame in the current burst. From the LAST frame,
+    /// → first lands on the end-of-burst stop screen; a second → wraps to the
+    /// first frame. Resets zoom on move. No-op when the burst has no displayed
+    /// frames.
     func previewNext() {
         let count = previewVisibleFrames.count
         guard count > 0 else { return }
-        previewFrameIndex = (previewFrameIndex + 1) % count
         previewZoom = false
+        // Second → off the end screen: wrap to the first frame.
+        if previewAtBurstEnd {
+            previewAtBurstEnd = false
+            previewFrameIndex = 0
+            return
+        }
+        // → off the last frame: stop on the end-of-burst screen (don't wrap yet).
+        if previewFrameIndex >= count - 1 {
+            previewAtBurstEnd = true
+            return
+        }
+        previewFrameIndex += 1
     }
 
     /// Move to the previous burst (group) that has displayed frames, wrapping, and
@@ -336,6 +366,7 @@ final class AppModel {
                 previewBurstIndex = i
                 previewFrameIndex = 0
                 previewZoom = false
+                previewAtBurstEnd = false
                 return
             }
         }
@@ -348,12 +379,13 @@ final class AppModel {
         guard count > 0 else { return }
         previewFrameIndex = min(max(0, frameIndex), count - 1)
         previewZoom = false
+        previewAtBurstEnd = false
     }
 
     /// Toggle the current preview frame's Favourite (the user's pick / export set).
     /// Keyed by frame id, like the grid star. No-op when there is no current frame.
     func previewToggleFavourite() {
-        guard let frame = previewFrame else { return }
+        guard !previewAtBurstEnd, let frame = previewFrame else { return }
         toggleFavourite(frame.id)
     }
 
@@ -363,8 +395,10 @@ final class AppModel {
         return isFavourite(frame.id)
     }
 
-    /// Toggle the 100% zoom on the preview stage.
+    /// Toggle the 100% zoom on the preview stage. No-op on the end-of-burst
+    /// screen — there is no photo to zoom there.
     func previewToggleZoom() {
+        guard !previewAtBurstEnd else { return }
         previewZoom.toggle()
     }
 
@@ -588,6 +622,13 @@ final class AppModel {
     /// On reaching 100% it auto-advances to Review.
     func runScoring() async {
         scoringStartedAt = ContinuousClock.now
+        // Drive the Elapsed clock independently of progress events: the core is silent
+        // for tens of seconds while its worker pool spawns and loads models (longer over
+        // a network mount), and progress-event-only updates would freeze the clock — the
+        // core of the "looks stuck" report. This ticker keeps it moving the whole pass and
+        // is torn down when scoring ends.
+        let ticker = Task { await tickElapsed() }
+        defer { ticker.cancel() }
         // The scoring pass computes the README default grouping (similarity).
         let grouping = Grouping.similarity
         do {
@@ -631,6 +672,7 @@ final class AppModel {
         scoringTotal = p.total
         scoringCurrentFrame = p.currentFrameName
         scoringCurrentBurstLabel = p.currentBurstLabel
+        scoringPhase = p.phase
         scoringProgress = p.fraction
         if let started = scoringStartedAt {
             let elapsed = ContinuousClock.now - started
@@ -644,12 +686,27 @@ final class AppModel {
         }
     }
 
+    /// Advance `scoringElapsed` off the wall clock ~twice a second, independently of
+    /// progress events, so the Elapsed card keeps ticking through the model-warmup
+    /// window when the core emits nothing. Runs until cancelled (scoring ends) or the
+    /// pass is reset. Reads the same `scoringStartedAt` `apply` does, so the two never
+    /// disagree on the elapsed value.
+    private func tickElapsed() async {
+        while !Task.isCancelled {
+            if let started = scoringStartedAt {
+                scoringElapsed = (ContinuousClock.now - started).seconds
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
     private func resetScoringState() {
         scoringProgress = 0
         scoringDone = 0
         scoringTotal = 0
         scoringCurrentFrame = ""
         scoringCurrentBurstLabel = ""
+        scoringPhase = nil
         scoringElapsed = 0
         scoringRemaining = 0
         scoreResult = nil
@@ -698,6 +755,22 @@ final class AppModel {
     /// `{done} of {total}` counts, grouped, for the sub-line under the percentage.
     var scoringCountsDisplay: (done: String, total: String) {
         (Self.grouped(scoringDone), Self.grouped(scoringTotal))
+    }
+
+    /// Title for the now-processing card. During the model-warmup window (the
+    /// `.loading` line, before any frame finishes) there is no frame to name, so show
+    /// "Preparing…" rather than the "—" placeholder that read as a stall; otherwise the
+    /// current frame's file name.
+    var scoringActivityTitle: String {
+        if scoringPhase == .loading { return "Preparing…" }
+        return scoringCurrentFrame.isEmpty ? "—" : scoringCurrentFrame
+    }
+
+    /// Sub-line for the now-processing card: what the pass is doing. "loading detection
+    /// models" through warmup, otherwise "analysing · {burst label}".
+    var scoringActivitySubtitle: String {
+        if scoringPhase == .loading { return "loading detection models" }
+        return "analysing · \(scoringCurrentBurstLabel)"
     }
 
     func backToReviewButtonTapped() {
