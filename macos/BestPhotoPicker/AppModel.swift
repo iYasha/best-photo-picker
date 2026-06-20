@@ -7,7 +7,6 @@ enum Screen {
     case scoring
     case review
     case export
-    case settings
 }
 
 /// Which AI mark the Review grid is showing. The filter seam issue 6 builds chips
@@ -531,8 +530,6 @@ final class AppModel {
             return "\(bestCount) best · \(selectedCount) selected"
         case .export:
             return "export"
-        case .settings:
-            return "settings"
         }
     }
 
@@ -562,21 +559,10 @@ final class AppModel {
         return "\(Self.grouped(count)) photos · \(grouping) grouping"
     }
 
+    /// `File ▸ New Session` (⌘N). Settings now lives in the native ⌘, window, so
+    /// this is the only chrome-level navigation action left.
     func newSessionButtonTapped() {
         screen = .importSession
-    }
-
-    /// Where Settings was opened from, so its Back button can return there.
-    private var screenBeforeSettings: Screen = .importSession
-
-    func settingsButtonTapped() {
-        if screen != .settings { screenBeforeSettings = screen }
-        screen = .settings
-    }
-
-    /// Back button on the Settings screen — return to wherever it was opened from.
-    func closeSettingsButtonTapped() {
-        screen = screenBeforeSettings
     }
 
     func chooseSourceButtonTapped() {

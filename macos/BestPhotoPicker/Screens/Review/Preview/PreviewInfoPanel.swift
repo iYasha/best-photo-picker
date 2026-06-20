@@ -21,6 +21,13 @@ struct PreviewInfoPanel: View {
     let captureTime: String
     let onToggleFavourite: () -> Void
 
+    /// For resolving the frame's file (source root + rel path) to compute its
+    /// histogram — same seam `ThumbnailImage` uses.
+    @Environment(AppModel.self) private var model
+    /// The frame's tone histogram, once computed. `nil` while loading or on
+    /// failure (the chart wells render empty).
+    @State private var histogram: Histogram?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             markRow
@@ -34,6 +41,8 @@ struct PreviewInfoPanel: View {
             sharpnessRow
                 .padding(.bottom, 13)
             statChips
+                .padding(.bottom, 13)
+            HistogramCard(histogram: histogram)
                 .padding(.bottom, 13)
             if display.hasExposureWarning {
                 exposureRow
@@ -55,6 +64,16 @@ struct PreviewInfoPanel: View {
             RoundedRectangle(cornerRadius: Metrics.Radius.cardLarge)
                 .strokeBorder(Palette.borderSubtleAlt, lineWidth: 1)
         )
+        // Recompute on every frame change; clears to nil first so a stale chart
+        // never lingers under the new frame while its histogram is computing.
+        .task(id: display.frame.id) { await loadHistogram() }
+    }
+
+    private func loadHistogram() async {
+        histogram = nil
+        guard let root = model.sourceURL else { return }
+        let url = root.appending(path: display.frame.relPath)
+        histogram = await ImageCache.shared.histogram(forFrameID: display.frame.id, url: url)
     }
 
     // MARK: Mark row — dot + label + "AI mark"

@@ -1,31 +1,19 @@
 import SwiftUI
 
+// The window uses `.hiddenTitleBar`, so this bar IS the draggable chrome region.
+// New Session moved to `File ▸ New Session` (⌘N) and Settings to the native ⌘,
+// window, so the bar now carries no controls — just the gradient + hairline and
+// the reserved traffic-light gutter.
 struct TitleBar: View {
-    @Environment(AppModel.self) private var model
-
     var body: some View {
-        HStack(spacing: 0) {
-            Spacer().frame(width: 70)   // reserve the macOS traffic-light area
-            Spacer()
-            HStack(spacing: 6) {
-                IconButton(systemName: Icon.newSession, help: "New session") {
-                    model.newSessionButtonTapped()
-                }
-                IconButton(systemName: Icon.settings, help: "Settings") {
-                    model.settingsButtonTapped()
-                }
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: Metrics.Chrome.titleBarHeight)
+            .background(Palette.titleBarGradient)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Palette.borderSubtleAlt2)
+                    .frame(height: Metrics.Stroke.hairline)
             }
-            // Locked while a regroup is processing — only the panel's Cancel acts.
-            .disabled(model.regrouping)
-            .opacity(model.regrouping ? 0.5 : 1)
-        }
-        .padding(.horizontal, Metrics.Chrome.titleBarPadding)
-        .frame(height: Metrics.Chrome.titleBarHeight)
-        .background(Palette.titleBarGradient)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Palette.borderSubtleAlt2)
-                .frame(height: Metrics.Stroke.hairline)
-        }
     }
 }

@@ -26,7 +26,6 @@ struct SettingsView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                backButton
                 title
                 groupingCard($settings)
                 performanceCard($settings)
@@ -58,32 +57,6 @@ struct SettingsView: View {
     private let settingsMaxWidth: CGFloat = 640
 
     // MARK: Header
-
-    private var backButton: some View {
-        Button {
-            model.closeSettingsButtonTapped()
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: Icon.back)
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Back")
-                    .font(Typography.ui(12.5, weight: .semibold))
-            }
-            .foregroundStyle(Palette.textSecondary)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: Metrics.Radius.button)
-                    .fill(Palette.panelRaised)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Metrics.Radius.button)
-                    .strokeBorder(Palette.borderSubtleAlt2, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .padding(.bottom, 18)
-    }
 
     private var title: some View {
         VStack(alignment: .leading, spacing: 4) {

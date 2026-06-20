@@ -56,6 +56,20 @@ actor ImageCache {
     /// Decodes currently running, so duplicate requests await the same `Task`.
     private var inFlight: [Key: Task<CGImage?, Never>] = [:]
 
+    /// Tone histograms keyed by frame id (size-independent). Each is ~1 KB, so
+    /// they're kept for the session without eviction.
+    private var histograms: [String: Histogram] = [:]
+    /// In-flight histogram computes, de-duplicated like decodes.
+    private var histogramTasks: [String: Task<Histogram?, Never>] = [:]
+
+    /// **Single-slot** full-resolution decode for the zoomed Preview stage. Only
+    /// the most-recently-requested frame is held — a native decode of a 45 MP
+    /// frame is ~180 MB, so we keep at most ONE, deliberately outside the byte
+    /// budget above (which stays bounded for the gallery). Requesting a different
+    /// frame drops the previous one.
+    private var fullResID: String?
+    private var fullResImage: CGImage?
+
     /// Return the decoded thumbnail for `key`, decoding from `url` if not cached.
     /// Coalesces concurrent requests for the same key onto a single decode. Returns
     /// `nil` if the decode fails (caller shows the placeholder).
@@ -79,6 +93,50 @@ actor ImageCache {
         if let image {
             store(key, image)
         }
+        return image
+    }
+
+    /// Return the tone histogram for the frame, computing it once off a background
+    /// thread and memoising by frame id. Decodes its own small image (independent
+    /// of the display bucket) so the result is stable and cheap. Coalesces
+    /// concurrent requests. `nil` if the decode fails.
+    func histogram(forFrameID id: String, url: URL) async -> Histogram? {
+        if let hit = histograms[id] { return hit }
+        if let running = histogramTasks[id] { return await running.value }
+
+        let task = Task<Histogram?, Never>.detached(priority: .utility) {
+            guard let image = ThumbnailDecoder.decode(url: url, maxPixelSize: 256) else {
+                return nil
+            }
+            return Histogram.make(from: image)
+        }
+        histogramTasks[id] = task
+        let histogram = await task.value
+        histogramTasks[id] = nil
+
+        if let histogram { histograms[id] = histogram }
+        return histogram
+    }
+
+    /// Native-resolution decode of one frame, for true 1:1 detail when the Preview
+    /// stage is zoomed (the fit view stays on the small, byte-budgeted thumbnail).
+    /// Holds only the latest requested frame, so memory stays bounded to a single
+    /// image regardless of how many frames the user zooms into.
+    func fullResolution(forFrameID id: String, url: URL) async -> CGImage? {
+        if fullResID == id, let cached = fullResImage { return cached }
+
+        // Claim the slot synchronously (before the await) so a newer request for a
+        // different frame can supersede this one.
+        fullResID = id
+        fullResImage = nil
+        let task = Task<CGImage?, Never>.detached(priority: .userInitiated) {
+            // A max-pixel far above any real sensor never upscales — ImageIO caps
+            // at the image's own size — so this yields the native image, oriented.
+            ThumbnailDecoder.decode(url: url, maxPixelSize: 100_000)
+        }
+        let image = await task.value
+        // Only keep the result if we're still the frame the stage wants.
+        if fullResID == id { fullResImage = image }
         return image
     }
 

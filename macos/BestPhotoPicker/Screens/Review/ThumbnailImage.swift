@@ -193,7 +193,7 @@ struct ThumbnailImage: View {
 
 // MARK: - Image from CGImage (cross-platform-safe bridge)
 
-private extension Image {
+extension Image {
     /// Build a SwiftUI `Image` from a decoded `CGImage`. On macOS `Image(decorative:
     /// scale:orientation:)` takes a `CGImage` directly, avoiding an `NSImage`
     /// round-trip. `decorative` (no accessibility label) is right here — the photo

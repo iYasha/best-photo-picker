@@ -25,6 +25,14 @@ struct PreviewStage: View {
     let onPrev: () -> Void
     let onNext: () -> Void
 
+    /// For resolving the frame's file (source root + rel path) to decode it at
+    /// native resolution while zoomed — same seam `ThumbnailImage` uses.
+    @Environment(AppModel.self) private var model
+    /// Native-resolution decode of the current frame, loaded only while zoomed so
+    /// 1:1 detail is real pixels, not an upscaled thumbnail. `nil` at fit (the
+    /// small byte-budgeted thumbnail is shown then) and during the brief load.
+    @State private var fullRes: CGImage?
+
     private let radius: CGFloat = Metrics.Radius.cardLarge // 12
     private let snapScale: CGFloat = 2.4 // prototype's 240% background-size
     private let minScale: CGFloat = 1
@@ -42,12 +50,14 @@ struct PreviewStage: View {
 
     var body: some View {
         GeometryReader { geo in
-            ThumbnailImage(frame: display.frame, contentMode: .fit)
+            stageImage
                 .scaleEffect(scale)
                 .offset(offset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: radius))
-                .overlay(vignette)
+                // No vignette over the photo: this is a culling tool, so the stage
+                // must show true tones (and match the histogram). The hairline frame
+                // stays for definition.
                 .overlay(
                     RoundedRectangle(cornerRadius: radius)
                         .strokeBorder(Color.white.opacity(0.05), lineWidth: 1)
@@ -77,6 +87,51 @@ struct PreviewStage: View {
                 offset = .zero
             }
         }
+        // Load the native-resolution frame once zoom crosses fit, drop it on
+        // un-zoom or frame change (keyed on both so it re-fires correctly).
+        .task(id: FullResRequest(id: display.frame.id, wanted: wantsFullRes)) {
+            await updateFullRes()
+        }
+    }
+
+    // MARK: Stage image — thumbnail at fit, native decode while zoomed
+
+    /// Whether the stage is magnified enough to want true 1:1 pixels.
+    private var wantsFullRes: Bool { scale > minScale + 0.01 }
+
+    /// Re-decode key: the frame plus whether full-res is currently wanted.
+    private struct FullResRequest: Equatable {
+        let id: String
+        let wanted: Bool
+    }
+
+    /// At fit (or while the native decode is loading) show the small, byte-budgeted
+    /// thumbnail; once the full-resolution frame is ready show it instead, on the
+    /// same dark matte so the swap is seamless (identical fit geometry, just crisp).
+    @ViewBuilder private var stageImage: some View {
+        if let fullRes {
+            ZStack {
+                Palette.panelDeepAlt
+                Image(decoded: fullRes)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            ThumbnailImage(frame: display.frame, contentMode: .fit)
+        }
+    }
+
+    /// Load or drop the native-resolution decode for the current frame. Bounded to
+    /// a single frame by `ImageCache.fullResolution`, so memory stays flat.
+    private func updateFullRes() async {
+        guard wantsFullRes else { fullRes = nil; return }
+        guard let root = model.sourceURL else { return }
+        let url = root.appending(path: display.frame.relPath)
+        let image = await ImageCache.shared.fullResolution(forFrameID: display.frame.id, url: url)
+        // Ignore a late delivery if the user has un-zoomed since.
+        if wantsFullRes { fullRes = image }
     }
 
     // MARK: Zoom / pan
@@ -141,21 +196,6 @@ struct PreviewStage: View {
             width: min(maxX, max(-maxX, o.width)),
             height: min(maxY, max(-maxY, o.height))
         )
-    }
-
-    // MARK: Inner vignette
-
-    private var vignette: some View {
-        RoundedRectangle(cornerRadius: radius)
-            .fill(
-                RadialGradient(
-                    colors: [.clear, Color.black.opacity(0.35)],
-                    center: .center,
-                    startRadius: 0,
-                    endRadius: 520
-                )
-            )
-            .allowsHitTesting(false)
     }
 
     // MARK: ‹ › nav arrows (translucent, blur)

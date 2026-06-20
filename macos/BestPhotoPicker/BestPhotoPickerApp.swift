@@ -26,5 +26,23 @@ struct BestPhotoPickerApp: App {
         // minWidth/minHeight. `.contentSize` had pinned it to a fixed size.
         .windowResizability(.contentMinSize)
         .defaultSize(width: defaultSize.width, height: defaultSize.height)
+        .commands {
+            // New Session lives in the menu now (the title bar carries no controls).
+            CommandGroup(replacing: .newItem) {
+                Button("New Session") { model.newSessionButtonTapped() }
+                    .keyboardShortcut("n", modifiers: .command)
+            }
+        }
+
+        // Native Settings scene — opened by the standard ⌘, / app-menu item, so the
+        // gear button is gone from the title bar. Dark scheme + fixed frame so the
+        // dark column reads correctly in a standalone window (no `WindowChrome` here).
+        Settings {
+            SettingsView()
+                .environment(model)
+                .frame(width: 720, height: 640)
+                .background(Palette.windowBody)
+                .preferredColorScheme(.dark)
+        }
     }
 }

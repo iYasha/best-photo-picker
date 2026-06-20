@@ -14,8 +14,6 @@ struct RootView: View {
                 ReviewView()
             case .export:
                 ExportView()
-            case .settings:
-                SettingsView()
             }
         }
         .frame(minWidth: 900, minHeight: 600)
