@@ -34,13 +34,17 @@ enum SubprocessScoringError: Error, Sendable {
 // stdout is pure JSON — we read it line by line without filtering.
 //
 // ── Invocation (exact argv) ─────────────────────────────────────────────────
-//   uv run --project <repo> bestphoto score --json <source>
-//       -m <tmp>/manifest.csv  --cache <tmp>/.bpp-cache.csv
-//       [-c ~/Library/Application Support/BestPhotoPicker/config.toml]
-// `uv run --project <repo>` resolves the workspace's `bestphoto` script without a
-// pre-activated venv. The manifest still lands on disk (ADR 0001) — in a temp dir,
-// since the app's contract is the JSON; the human can still open that CSV. The
-// `-c` flag is added only when the issue-11 config file exists (shared path).
+// Two runners, same `score …` argv (`coreArguments`); a bundled core wins:
+//   * bundled (distributed app):  <app>/Contents/Resources/core/bestphoto
+//         score --json <source> -m <tmp>/manifest.csv --cache <tmp>/.bpp-cache.csv …
+//     The launcher execs a relocatable Python embedded in the app and points the
+//     core at bundled models (BPP_FACE_*) — no uv, no repo, no toolchain.
+//   * dev fallback:  uv run --project <repo> bestphoto score --json <source> …
+//     `uv run --project <repo>` resolves the workspace's `bestphoto` without a
+//     pre-activated venv.
+// Either way the manifest still lands on disk (ADR 0001) — in a temp dir, since the
+// app's contract is the JSON; the human can still open that CSV. The `-c` flag is
+// added only when the issue-11 config file exists (shared path).
 //
 // ── Cancellation ────────────────────────────────────────────────────────────
 // The producing `Task` registers `continuation.onTermination`, which terminates
@@ -50,26 +54,43 @@ enum SubprocessScoringError: Error, Sendable {
 
 struct SubprocessScoringEngine: ScoringEngine {
 
+    /// A self-contained core bundled inside the .app (`Contents/Resources/core/bestphoto`):
+    /// a relocatable Python + the `bestphoto` package + models. When present it is the
+    /// preferred runner — no `uv`, no repo, no toolchain needed (distributed app).
+    var bundledCore: URL?
     /// Absolute path to the repo root (the uv workspace passed to `uv run --project`).
-    /// Resolved once at construction; `nil` means "cannot run" and the engine fails
-    /// cleanly so `CoreBridge` keeps the fixture fallback.
+    /// Used only as the dev fallback when no bundled core is present.
     var repoRoot: URL?
-    /// Path to the `uv` executable.
+    /// Path to the `uv` executable (dev fallback alongside `repoRoot`).
     var uvPath: URL?
     /// The issue-11 config file; passed via `-c` only when it exists on disk.
     var configURL: URL
 
-    init(repoRoot: URL? = SubprocessScoringEngine.resolveRepoRoot(),
+    init(bundledCore: URL? = SubprocessScoringEngine.resolveBundledCore(),
+         repoRoot: URL? = SubprocessScoringEngine.resolveRepoRoot(),
          uvPath: URL? = SubprocessScoringEngine.resolveUV(),
          configURL: URL = SubprocessScoringEngine.defaultConfigURL) {
+        self.bundledCore = bundledCore
         self.repoRoot = repoRoot
         self.uvPath = uvPath
         self.configURL = configURL
     }
 
-    /// True when a real run is possible: a resolvable repo + `uv`. `CoreBridge`
-    /// consults this (plus a non-nil source) before choosing this engine.
-    var isAvailable: Bool { repoRoot != nil && uvPath != nil }
+    /// How the core will be launched, resolved from what's available. A bundled core
+    /// (distributed app) wins; otherwise the dev fallback (`uv run` against the repo).
+    enum Runner {
+        case bundled(launcher: URL)
+        case uv(uvPath: URL, repoRoot: URL)
+    }
+    var runner: Runner? {
+        if let bundledCore { return .bundled(launcher: bundledCore) }
+        if let uvPath, let repoRoot { return .uv(uvPath: uvPath, repoRoot: repoRoot) }
+        return nil
+    }
+
+    /// True when a real run is possible: a bundled core, or a resolvable repo + `uv`.
+    /// `CoreBridge` consults this (plus a non-nil source) before choosing this engine.
+    var isAvailable: Bool { runner != nil }
 
     // MARK: Stream
 
@@ -79,9 +100,9 @@ struct SubprocessScoringEngine: ScoringEngine {
                 continuation.finish(throwing: SubprocessScoringError.unavailable("no source folder"))
                 return
             }
-            guard let repoRoot, let uvPath else {
+            guard let runner else {
                 continuation.finish(throwing: SubprocessScoringError.unavailable(
-                    "uv / repo not resolvable"))
+                    "no bundled core, and uv / repo not resolvable"))
                 return
             }
 
@@ -96,10 +117,19 @@ struct SubprocessScoringEngine: ScoringEngine {
                 do {
                     let tmp = try Self.makeWorkDir()
                     workDir = tmp
-                    process.executableURL = uvPath
-                    process.arguments = Self.arguments(
-                        repoRoot: repoRoot, source: source, workDir: tmp,
-                        configURL: configURL, grouping: grouping)
+                    let coreArgs = Self.coreArguments(
+                        source: source, workDir: tmp, configURL: configURL, grouping: grouping)
+                    switch runner {
+                    case .bundled(let launcher):
+                        // Self-contained: the launcher sets BPP_FACE_* and execs the
+                        // bundled interpreter; argv starts at the `score` subcommand.
+                        process.executableURL = launcher
+                        process.arguments = coreArgs
+                    case .uv(let uvPath, let repoRoot):
+                        process.executableURL = uvPath
+                        process.arguments =
+                            ["run", "--project", repoRoot.path, "bestphoto"] + coreArgs
+                    }
                     process.standardOutput = stdout
                     process.standardError = stderr
                     // A login-ish env so `uv` finds its toolchain when launched
@@ -181,12 +211,13 @@ struct SubprocessScoringEngine: ScoringEngine {
 
     // MARK: Argv
 
-    static func arguments(
-        repoRoot: URL, source: URL, workDir: URL, configURL: URL, grouping: Grouping
+    /// The core's own argv from the `score` subcommand onward — shared by both runners
+    /// (the bundled launcher uses it as-is; the uv runner prepends `run --project … bestphoto`).
+    static func coreArguments(
+        source: URL, workDir: URL, configURL: URL, grouping: Grouping
     ) -> [String] {
         var args = [
-            "run", "--project", repoRoot.path,
-            "bestphoto", "score", "--json", source.path,
+            "score", "--json", source.path,
             "-m", workDir.appendingPathComponent("manifest.csv").path,
             "--cache", workDir.appendingPathComponent(".bpp-cache.csv").path,
             // `--group time|similarity` (ADR 0004); the enum raw value is the CLI
@@ -212,6 +243,16 @@ struct SubprocessScoringEngine: ScoringEngine {
         return support
             .appendingPathComponent("BestPhotoPicker", isDirectory: true)
             .appendingPathComponent("config.toml", isDirectory: false)
+    }
+
+    /// The bundled, self-contained core launcher inside the app, if present:
+    /// `<app>/Contents/Resources/core/bestphoto`. Built + injected by
+    /// `macos/scripts/bundle-app.sh`. `nil` in a plain dev build (Xcode run from
+    /// source has no embedded core) → the engine falls back to `uv run`.
+    static func resolveBundledCore() -> URL? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let launcher = resources.appendingPathComponent("core/bestphoto", isDirectory: false)
+        return FileManager.default.isExecutableFile(atPath: launcher.path) ? launcher : nil
     }
 
     /// Find the uv-workspace repo root (the dir holding `uv.lock` + `core/bestphoto`).
