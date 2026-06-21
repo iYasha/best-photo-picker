@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Best Photo Picker</title>
+    <item>
+      <title>1.0.0</title>
+      <pubDate>Sun, 21 Jun 2026 12:38:35 +0000</pubDate>
+      <sparkle:version>1.0.0</sparkle:version>
+      <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/iYasha/best-photo-picker/releases/download/v1.0.0/BestPhotoPicker-1.0.0.zip"
+                 sparkle:edSignature="ehtcqwNgMSvntNHLzyyhkUaA+0lcITIj9d05eA+5dOH1/p5QRmzScDy+EAE2lqYSq3usJW5MMSKPmPthkywrDA=="
+                 length="121609999"
+                 type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>
