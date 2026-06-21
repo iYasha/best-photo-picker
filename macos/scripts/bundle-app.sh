@@ -23,10 +23,14 @@ else
 fi
 
 # 2. Release build (ad-hoc; no dev team configured).
+#    release.sh stamps the version by exporting MARKETING_VERSION / CURRENT_PROJECT_VERSION;
+#    unset (plain `make`-style build) → xcodebuild keeps the pbxproj defaults.
 echo "==> xcodebuild Release…"
 xcodebuild -project "$MACOS/BestPhotoPicker.xcodeproj" -scheme BestPhotoPicker \
   -configuration Release -derivedDataPath "$DD" \
   CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
+  ${MARKETING_VERSION:+MARKETING_VERSION="$MARKETING_VERSION"} \
+  ${CURRENT_PROJECT_VERSION:+CURRENT_PROJECT_VERSION="$CURRENT_PROJECT_VERSION"} \
   clean build | grep -E 'error:|BUILD SUCCEEDED|BUILD FAILED' || true
 
 BUILT="$DD/Build/Products/Release/$APP_NAME"

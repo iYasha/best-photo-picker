@@ -6,6 +6,8 @@ struct BestPhotoPickerApp: App {
 
     init() {
         FontRegistration.registerBundledFonts()
+        // Start Sparkle when the packaged .app carries a feed (no-op for feedless builds).
+        _ = AppUpdater.shared
     }
 
     private var defaultSize: CGSize {
@@ -31,6 +33,10 @@ struct BestPhotoPickerApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Session") { model.newSessionButtonTapped() }
                     .keyboardShortcut("n", modifiers: .command)
+            }
+            // Standard macOS location: app menu, just under "About".
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { AppUpdater.shared.checkForUpdates() }
             }
         }
 

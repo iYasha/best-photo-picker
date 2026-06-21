@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
@@ -28,5 +28,13 @@
 	<string>NSApplication</string>
 	<key>ATSApplicationFontsPath</key>
 	<string>.</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/iYasha/best-photo-picker/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>o5pi0q0j50wc++dJ9cMWH7U2MnAECaqB1W123DWqGaY=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>
